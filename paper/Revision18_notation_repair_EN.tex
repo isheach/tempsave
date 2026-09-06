@@ -1,0 +1,391 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{enumitem}
+\setlist[enumerate]{leftmargin=*,itemsep=1pt,topsep=2pt}
+\newcommand{\med}{\operatorname{median}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\Oh}{\widehat{\mathcal O}}
+
+\title{Outlier Detection in Continuous-Time Dynamic Systems via Downsampling Search and Multi-Scale Patch Analysis}
+\author{Author Name}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper studies model-based outlier detection in continuous-time dynamic systems when measured outputs contain large deviations. Reliable residual-based detection requires an accurate dynamic model, but the model itself must be estimated from measurements that may already contain outliers. Two methods are developed. The Downsampling method partitions the sampled data into lower-rate child sequences and searches for a child that supports reliable continuous-time model estimation. The resulting model is returned to the original sampling rate, where a robust median--MAD detector localizes outliers; the detected samples are then repaired once and the model is re-estimated from the corrected output. The Patch method operates at the original sampling rate, models local residual structure with overlapping multi-scale Patches, robustly estimates the normal residual trend, repairs detected samples, and re-estimates the model iteratively. Continuous-time parameters are refined by nonlinear prediction-error minimization under a stable model structure. Controlled simulations show high detection accuracy for both methods over the tested outlier counts and amplitudes.
+\end{abstract}
+
+\begin{IEEEkeywords}
+outlier detection, continuous-time system identification, downsampling, prediction residual, multi-scale Patch, robust statistics.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Outlier detection in dynamic input--output data is closely coupled with system identification. A prediction residual can reveal an abnormal measurement only when the identified model describes the nominal dynamics sufficiently well, yet the same model is estimated from data that may already contain outliers. Contaminated measurements can therefore bias the model, while a biased model can create large residuals at otherwise nominal samples.
+
+Classical time-series work addressed this coupling through intervention and robust-estimation ideas. Iterative procedures for additive and innovational outliers estimate model parameters and outlier effects jointly \cite{chang1988,chen1993}. Robust ARMA estimators reduce the influence or propagation of abnormal observations through bounded residual constructions and robust loss functions \cite{bustos1986,muler2009,muma2017}. In system identification, explicit gross-error models and heavy-tailed observation models have also been used to protect parameter estimation from contaminated outputs \cite{xu2014,bottegal2014,bottegal2016}. These studies establish that robust model estimation and pointwise outlier localization are related but distinct tasks.
+
+Once a reliable dynamic model is available, the discrepancy between a measured output and its model-based prediction becomes a natural indicator of an outlier. Robust filtering uses the same principle through innovations \cite{masreliez1977}, while robust location and scale statistics such as the median and median absolute deviation (MAD) prevent a few large residuals from dominating a global decision rule \cite{rousseeuw1993}. Two practical difficulties remain: the original-rate data can be too contaminated for direct identification, and normal residuals may exhibit local structure that is poorly represented by one sequence-wide scale.
+
+This paper addresses these difficulties with two methods. The Downsampling method redistributes samples into lower-rate child sequences and searches the resulting tree for a sequence that supports accurate continuous-time model identification. The selected model is then evaluated at the original sampling rate for outlier localization, followed by one repair and re-estimation step. The Patch method analyzes original-rate residuals over several overlapping window lengths, estimates local normal residual trends with robust quadratic fits, fuses evidence across overlapping Patches and scales, repairs detected samples, and re-estimates the model iteratively.
+
+The main contributions are:
+\begin{enumerate}
+\item a Downsampling tree search that separates reliable model recovery from final pointwise outlier localization and includes a post-detection repair/re-estimation step;
+\item an iterative multi-scale Patch detector that combines robust local residual modeling, adaptive scoring, multi-scale support, and model-based output repair.
+\end{enumerate}
+
+Only three output concepts are used throughout the paper. The nominal system output is $y_k$, the measured output is $\bar y_k$, and the model-based prediction is $\hat y_k$. The superscripts $o$ and $c$ distinguish the only two prediction cases used below: $\hat y_k^{o}(\theta)$ is the one-step prediction associated with the original measured output sequence, whereas $\hat y_k^{c}(\theta)$ is the one-step prediction associated with a corrected output sequence. Both predictions are generated from the identified parameter vector $\theta$; the superscript indicates only which output sequence is used in the corresponding estimation/prediction step.
+
+\section{Problem Formulation}
+Consider a continuous-time single-input single-output linear time-invariant system
+\begin{equation}
+G(s;\theta)=\frac{B(s;\theta)}{A(s;\theta)},
+\end{equation}
+where $A$ and $B$ are the denominator and numerator polynomials and $\theta$ contains their unknown coefficients. The input $u(t)$ and nominal output $y(t)$ are sampled at interval $T_s$, producing $u_k$ and $y_k$, $k=1,\ldots,N$. The measured output is
+\begin{equation}
+\bar y_k=y_k+\varepsilon_k,
+\end{equation}
+where $\varepsilon_k=0$ for a nominal sample and $\varepsilon_k\neq0$ for an outlier. The objective is to estimate a model that represents the nominal dynamics and to determine the indices at which $\varepsilon_k\neq0$ without using those locations during identification.
+
+\section{Downsampling-Based Outlier Detection}
+\subsection{Continuous-Time Model Estimation}
+For prescribed denominator and numerator orders, write
+\begin{align}
+A(s;\theta)&=s^{n_a}+a_1s^{n_a-1}+\cdots+a_{n_a},\\
+B(s;\theta)&=b_0s^{n_b}+b_1s^{n_b-1}+\cdots+b_{n_b},
+\end{align}
+with
+\begin{equation}
+\theta=[a_1,\ldots,a_{n_a},b_0,\ldots,b_{n_b}]^{\mathsf T}.
+\end{equation}
+A state-space realization of $G(s;\theta)$ is denoted by $A_x(\theta)$, $B_x(\theta)$, $C_x(\theta)$, and $D_x(\theta)$:
+\begin{align}
+\dot x(t)&=A_x(\theta)x(t)+B_x(\theta)u(t),\\
+\hat y(t;\theta)&=C_x(\theta)x(t)+D_x(\theta)u(t).
+\end{align}
+For a sampling interval $T$, zero-order-hold discretization gives
+\begin{align}
+F_\theta&=\exp\!\left(A_x(\theta)T\right),\\
+H_\theta&=\int_0^T \exp\!\left(A_x(\theta)\tau\right)B_x(\theta)\,d\tau.
+\end{align}
+The same state recursion is used for the two prediction cases. With $a\in\{o,c\}$,
+\begin{align}
+\hat x_{k+1}^{a}&=F_\theta\hat x_k^{a}+H_\theta u_k,\\
+\hat y_k^{a}(\theta)&=C_x(\theta)\hat x_k^{a}+D_x(\theta)u_k.
+\end{align}
+Here $a=o$ denotes prediction associated with the original measured output sequence, and $a=c$ denotes prediction associated with a corrected output sequence. For either case, the parameter vector is obtained by minimizing the corresponding one-step prediction errors. If the output sequence used for fitting is denoted by $\bar y_k^{a}$, where $\bar y_k^{o}\equiv\bar y_k$, then
+\begin{equation}
+J^{a}(\theta)=\sum_{k=1}^{N_a}\left[\bar y_k^{a}-\hat y_k^{a}(\theta)\right]^2,
+\qquad
+\hat\theta^{a}=\arg\min_{\theta\in\Theta_s}J^{a}(\theta),
+\end{equation}
+where $\Theta_s$ denotes the set of stable continuous-time models.
+
+Because the sampled state transition depends nonlinearly on $\theta$, the criterion is nonlinear. At iteration $q$, define the prediction sensitivity
+\begin{equation}
+\psi_k^{(q)}=\left.\frac{\partial \hat y_k^{a}(\theta)}{\partial\theta}\right|_{\theta=\theta^{(q)}},
+\end{equation}
+and stack the sensitivities into $\Psi_q$. With the prediction-error vector $e_q$, a damped Gauss--Newton update is
+\begin{equation}
+\left(\Psi_q^{\mathsf T}\Psi_q+\lambda_q I\right)\Delta\theta_q
+=\Psi_q^{\mathsf T}e_q,
+\end{equation}
+followed by
+\begin{equation}
+\theta^{(q+1)}=\theta^{(q)}+\alpha_q\Delta\theta_q.
+\end{equation}
+Only updates that reduce the prediction-error criterion while preserving model stability are accepted.
+
+\subsection{Downsampling Partition and Tree Search}
+The original-rate sequence forms the root of the search tree. Let the current node contain the time-ordered sample-index set
+\begin{equation}
+\mathcal I=\{i_1,i_2,\ldots,i_M\},
+\end{equation}
+where $M=|\mathcal I|$; at the root, $M=N$. For split factor $K$, the node is partitioned into $K$ nonoverlapping children,
+\begin{equation}
+\mathcal I_j=\{i_j,i_{j+K},i_{j+2K},\ldots\},\qquad j=1,\ldots,K.
+\end{equation}
+Let $N_j=|\mathcal I_j|$. Each child has an effective sampling interval $K$ times that of its parent, and a selected child can be partitioned again in the same way.
+
+For child $j$, let $\bar y_{j,\ell}$ and $u_{j,\ell}$, $\ell=1,\ldots,N_j$, denote the output and input selected by $\mathcal I_j$. Define the child prediction-error criterion
+\begin{equation}
+Q_j(\theta)=\sum_{\ell=1}^{N_j}\left[\bar y_{j,\ell}-\hat y_{j,\ell}^{o}(\theta)\right]^2,
+\end{equation}
+and obtain
+\begin{equation}
+\hat\theta_j=\arg\min_{\theta\in\Theta_s}Q_j(\theta).
+\end{equation}
+The optimized residual sum of squares (RSS) is represented by the single-letter quantity
+\begin{equation}
+Q_j=Q_j(\hat\theta_j).
+\end{equation}
+A child is accepted when
+\begin{equation}
+Q_j<\varepsilon_R.
+\end{equation}
+If several children satisfy the criterion, the model with the smallest $Q_j$ is returned. If none is accepted at the current level, splittable children are visited in increasing $Q_j$ order. After an unsuccessful branch, the search returns to the parent and visits the next child. The final parameter vector returned by the tree is denoted by $\hat\theta_d$.
+
+\subsection{Original-Rate Residual Detection}
+The original-output one-step prediction generated by the Downsampling estimate is $\hat y_k^{o}(\hat\theta_d)$. The detection residual is
+\begin{equation}
+r_{d,k}=\bar y_k-\hat y_k^{o}(\hat\theta_d).
+\end{equation}
+Let the residual collection be
+\begin{equation}
+\mathcal R_d=\{r_{d,1},r_{d,2},\ldots,r_{d,N}\}.
+\end{equation}
+The residual center is the median of this collection,
+\begin{equation}
+m_d=\med(\mathcal R_d),
+\end{equation}
+and the median absolute deviation is
+\begin{equation}
+\mathrm{MAD}_d=\med\left(\{|r_{d,k}-m_d|:k=1,\ldots,N\}\right).
+\end{equation}
+The consistency-corrected robust scale is
+\begin{equation}
+s_d=1.4826\,\mathrm{MAD}_d,
+\end{equation}
+and the detected set is
+\begin{equation}
+\Oh_d=\{k:|r_{d,k}-m_d|>\gamma s_d\}.
+\end{equation}
+Thus the median and MAD are applied to the complete residual collection rather than to an individual residual value.
+
+\subsection{One-Step Repair and Re-Estimation}
+After $\Oh_d$ is obtained, the detected measurements are repaired once using the original-output prediction:
+\begin{equation}
+\bar y_k^{c}=\begin{cases}
+\hat y_k^{o}(\hat\theta_d),&k\in\Oh_d,\\
+\bar y_k,&k\notin\Oh_d.
+\end{cases}
+\end{equation}
+The corrected sequence is then used to re-estimate the model,
+\begin{equation}
+\hat\theta_d^{c}=\arg\min_{\theta\in\Theta_s}
+\sum_{k=1}^{N}\left[\bar y_k^{c}-\hat y_k^{c}(\theta)\right]^2.
+\end{equation}
+This step supplies a corrected output sequence and a refined nominal model. The pointwise outlier set $\Oh_d$ remains the set obtained from the original measured output in the preceding subsection.
+
+\section{Multi-Scale Patch-Based Outlier Detection}
+The Patch method performs an estimate--analyze residual--repair--re-estimate cycle. Initialize the corrected output as
+\begin{equation}
+\bar y_k^{c,0}=\bar y_k.
+\end{equation}
+Because the initial corrected sequence equals the measured sequence, the first prediction is the original-output case $\hat y_k^{o}$. After the first repair, subsequent iterations use the corrected-output prediction $\hat y_k^{c}$.
+
+\subsection{Model Update and Detection Residual}
+At iteration $i$, the current corrected output $\bar y_k^{c,i-1}$ is used for parameter estimation, while the original measurement $\bar y_k$ is retained for outlier evaluation. Define
+\begin{equation}
+e_k^{(i)}(\theta)=\bar y_k^{c,i-1}-\hat y_k^{c}(\theta),
+\end{equation}
+with the understanding that $\hat y_k^{c}$ coincides with $\hat y_k^{o}$ at the first iteration. A robust scale is
+\begin{equation}
+\sigma_i=1.4826\,\med\left(\{|e_k^{(i)}-\med(\mathcal E_i)|\}\right),
+\end{equation}
+where $\mathcal E_i=\{e_k^{(i)}\}$ denotes the prediction-error collection at iteration $i$. With $q_k=e_k^{(i)}/\sigma_i$, use
+\begin{equation}
+\rho_\delta(q)=\begin{cases}
+q^2,&|q|\le\delta,\\
+2\delta|q|-\delta^2,&|q|>\delta.
+\end{cases}
+\end{equation}
+The current parameter vector is
+\begin{equation}
+\hat\theta_p^{(i)}=\arg\min_{\theta\in\Theta_s}\sum_k\rho_\delta(q_k).
+\end{equation}
+The loss is quadratic near the center and linear in the tails, so large prediction errors receive reduced influence. The detection residual is always formed against the original measured output,
+\begin{equation}
+r_{p,k}^{(i)}=\bar y_k-\hat y_k^{c}(\hat\theta_p^{(i)}).
+\end{equation}
+
+\subsection{Local Quadratic Patch Modeling and Multi-Scale Fusion}
+Let $L_\ell$ denote the Patch length at scale $\ell$, and let $\mathcal P_{\ell,p}$ be the sample set covered by Patch $p$. Using a normalized local coordinate $x\in[-1,1]$, the normal residual trend is represented by
+\begin{equation}
+\tilde r_{\ell,p}^{(i)}(x)=a_0+a_1x+a_2x^2.
+\end{equation}
+The coefficients are obtained by iteratively reweighted least squares with bisquare weights. For $k\in\mathcal P_{\ell,p}$,
+\begin{equation}
+e_{\ell,p,k}^{(i)}=r_{p,k}^{(i)}-\tilde r_{\ell,p,k}^{(i)}.
+\end{equation}
+The local center and scale are
+\begin{align}
+m_{\ell,p}^{(i)}&=\med\left(\{e_{\ell,p,k}^{(i)}:k\in\mathcal P_{\ell,p}\}\right),\\
+s_{\ell,p}^{(i)}&=1.4826\,\med\left(\{|e_{\ell,p,k}^{(i)}-m_{\ell,p}^{(i)}|:k\in\mathcal P_{\ell,p}\}\right).
+\end{align}
+A global variation scale is estimated from first differences,
+\begin{equation}
+s_g^{(i)}=\frac{1.4826}{\sqrt 2}\,
+\med\left(\{|\Delta r_{p,k}^{(i)}-\med(\{\Delta r_{p,j}^{(i)}\})|\}\right).
+\end{equation}
+To stabilize short-Patch scales, define
+\begin{equation}
+\omega_\ell=\frac{\eta}{L_\ell+\eta},\qquad
+s_{\ell,p}^{r,(i)}=
+\sqrt{(1-\omega_\ell)(s_{\ell,p}^{(i)})^2+\omega_\ell(s_g^{(i)})^2},
+\end{equation}
+where the one-letter superscript $r$ denotes the regularized scale. Use
+\begin{equation}
+s_{\ell,p}^{*,(i)}=\max\{s_{\ell,p}^{(i)},s_{\ell,p}^{r,(i)},s_0\},
+\end{equation}
+and define the Patch score
+\begin{equation}
+z_{\ell,p,k}^{(i)}=\frac{|e_{\ell,p,k}^{(i)}|}{s_{\ell,p}^{*,(i)}}.
+\end{equation}
+For a fixed scale, all overlapping Patch estimates that contain sample $k$ are fused by medians,
+\begin{align}
+\tilde r_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}\tilde r_{\ell,p,k}^{(i)},\\
+z_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}z_{\ell,p,k}^{(i)}.
+\end{align}
+The scale-specific values are then fused across scales,
+\begin{align}
+\tilde r_{p,k}^{(i)}&=\med_{\ell}\tilde r_{\ell,k}^{(i)},\\
+z_{p,k}^{(i)}&=\med_{\ell}z_{\ell,k}^{(i)}.
+\end{align}
+
+\subsection{Adaptive Threshold, Multi-Scale Support, and Repair}
+Let $N_v$ be the number of finite fused scores and $\alpha$ a target sequence-level false-alarm probability. Define
+\begin{equation}
+\tau_g=\sqrt 2\,\operatorname{erfc}^{-1}\!\left(\frac{\alpha}{N_v}\right).
+\end{equation}
+The median and consistency-corrected MAD of the fused-score collection $\mathcal Z_i=\{z_{p,k}^{(i)}\}$ are
+\begin{align}
+m_z^{(i)}&=\med(\mathcal Z_i),\\
+s_z^{(i)}&=1.4826\,\med\left(\{|z_{p,k}^{(i)}-m_z^{(i)}|\}\right).
+\end{align}
+The adaptive threshold is
+\begin{equation}
+\tau^{(i)}=\max\{\tau_g,m_z^{(i)}+\tau_gs_z^{(i)}\}.
+\end{equation}
+Multi-scale agreement is measured by
+\begin{equation}
+c_k^{(i)}=\sum_{\ell}\ind\!\left(z_{\ell,k}^{(i)}>\tau^{(i)}\right),
+\end{equation}
+where the indicator function $\ind(\cdot)$ equals $1$ when its condition is true and $0$ otherwise. Sample $k$ enters $\Oh_p^{(i)}$ only when $z_{p,k}^{(i)}>\tau^{(i)}$ and $c_k^{(i)}\ge R$, where $R$ is the required minimum number of supporting scales.
+
+Detected samples are repaired as
+\begin{equation}
+\bar y_k^{c,i}=\begin{cases}
+\hat y_k^{c}(\hat\theta_p^{(i)})+\tilde r_{p,k}^{(i)},&k\in\Oh_p^{(i)},\\
+\bar y_k,&k\notin\Oh_p^{(i)}.
+\end{cases}
+\end{equation}
+The corrected output is used in the next parameter estimation. The iteration stops when the detected set is unchanged and the relative change between two successive corrected outputs is below a prescribed tolerance, or when the maximum iteration number is reached.
+
+\section{Simulation Experiments}
+The benchmark system is
+\begin{equation}
+G_0(s)=\frac{1}{s^2+2s+1}.
+\end{equation}
+A unit-step input is applied from zero initial state, and the continuous-time response is sampled at $T_s=0.01$~s to form a 500-sample sequence. Outliers are introduced by adding gross deviations at selected sample locations. Three outlier counts, 5, 10, and 15, are tested. The base amplitudes are $\pm0.10,\pm0.12,\ldots,\pm0.38$. This list is randomly permuted once with a fixed seed, giving the first 15 values
+\begin{equation}
+\begin{aligned}
+&[0.26,-0.38,-0.30,-0.24,-0.10,-0.22,0.36,-0.32,\\
+&\quad 0.32,0.38,0.18,0.20,-0.26,0.28,-0.34].
+\end{aligned}
+\end{equation}
+The 5-, 10-, and 15-outlier conditions use the first 5, 10, and 15 entries of this fixed order, respectively, and the base amplitudes are multiplied by $0.25$, $0.5$, $1$, $2$, or $4$. For a fixed outlier count and experiment index, all five multipliers share the same outlier locations and base amplitudes. Each count--multiplier condition is repeated 100 times.
+
+Let $\mathcal O$ be the true outlier-index set and $\Oh$ the detected set. The pointwise counts are
+\begin{align}
+\mathrm{TP}&=|\mathcal O\cap\Oh|,\\
+\mathrm{FP}&=|\Oh\setminus\mathcal O|,\\
+\mathrm{FN}&=|\mathcal O\setminus\Oh|,\\
+\mathrm{TN}&=N-\mathrm{TP}-\mathrm{FP}-\mathrm{FN}.
+\end{align}
+The derived measures are
+\begin{align}
+\mathrm{Precision}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}},\\
+\mathrm{Recall}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FN}},\\
+F1&=\frac{2\,\mathrm{Precision}\,\mathrm{Recall}}{\mathrm{Precision}+\mathrm{Recall}}.
+\end{align}
+Precision measures the fraction of detected samples that are true outliers, recall measures the fraction of true outliers that are detected, and F1 is their harmonic mean.
+
+\begin{table*}[t]
+\centering
+\caption{Downsampling detection results for different outlier counts and amplitude multipliers (100 experiments per row).}
+\label{tab:down}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+Outliers & Mult. & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&0.50&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&1.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&2.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&4.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+10&0.25&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&0.50&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&1.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&2.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&4.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+15&0.25&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&0.50&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&1.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&2.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&4.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{Patch detection results for different outlier counts and amplitude multipliers (100 experiments per row).}
+\label{tab:patch}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+Outliers & Mult. & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&0.50&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&1.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&2.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&4.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+10&0.25&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&0.50&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&1.00&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&2.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+10&4.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+15&0.25&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&0.50&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&1.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&2.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&4.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Tables~\ref{tab:down} and \ref{tab:patch} report the same pointwise metrics for all 15 conditions. For Downsampling, mean TP equals the true outlier count and mean FN is zero in every condition, so recall is one throughout the tested range. The main loss comes from false positives in a small number of experiments: mean FP is $0.41$, $1.55$, and $1.05$ for 5, 10, and 15 outliers, respectively, producing F1 values between $0.9281$ and $0.9662$. Patch produces substantially fewer false positives. Mean FP is $0.04$ for 5 outliers, $0.02$--$0.04$ for 10 outliers, and $0.22$ for 15 outliers; mean FN is only $0.01$ for the 15-outlier case. Consequently, Patch maintains precision above $0.985$, recall close to one, and F1 between $0.9924$ and $0.9990$. In both methods, the results are nearly unchanged across the five amplitude multipliers under the current controlled conditions.
+
+\section{Conclusion}
+Two model-based outlier detection methods have been developed for continuous-time dynamic systems. Downsampling searches lower-rate child sequences for a reliable continuous-time model, performs robust pointwise detection at the original sampling rate, and then repairs the detected measurements once before re-estimating the model. Patch operates directly on original-rate residuals, describes local normal residual structure over several temporal scales, and iteratively repairs detected samples and updates the model. The controlled simulations show high recall for Downsampling and lower false-positive counts for Patch over the tested conditions. Future work will evaluate the methods under measurement noise, broader dynamic-system classes, and real measured data.
+
+\begin{thebibliography}{15}
+\bibitem{chandola2009} V. Chandola, A. Banerjee, and V. Kumar, ``Anomaly detection: A survey,'' \emph{ACM Computing Surveys}, vol. 41, no. 3, pp. 1--58, 2009.
+\bibitem{blazquez2021} A. Bl\'azquez-Garc\'ia, A. Conde, U. Mori, and J. A. Lozano, ``A review on outlier/anomaly detection in time series data,'' \emph{ACM Computing Surveys}, vol. 54, no. 3, pp. 1--33, 2021.
+\bibitem{schmidl2022} S. Schmidl, P. Wenig, and T. Papenbrock, ``Anomaly detection in time series: A comprehensive evaluation,'' \emph{Proc. VLDB Endow.}, vol. 15, no. 9, pp. 1779--1797, 2022.
+\bibitem{chang1988} I. Chang, G. C. Tiao, and C. Chen, ``Estimation of time series parameters in the presence of outliers,'' \emph{Technometrics}, vol. 30, no. 2, pp. 193--204, 1988.
+\bibitem{chen1993} C. Chen and L.-M. Liu, ``Joint estimation of model parameters and outlier effects in time series,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 421, pp. 284--297, 1993.
+\bibitem{bustos1986} O. H. Bustos and V. J. Yohai, ``Robust estimates for ARMA models,'' \emph{J. Amer. Stat. Assoc.}, vol. 81, no. 393, pp. 155--168, 1986.
+\bibitem{muler2009} N. Muler, D. Pe\~na, and V. J. Yohai, ``Robust estimation for ARMA models,'' \emph{Ann. Stat.}, vol. 37, no. 2, pp. 816--840, 2009.
+\bibitem{muma2017} M. Muma and A. M. Zoubir, ``Bounded influence propagation $\tau$-estimation: A new robust method for ARMA model estimation,'' \emph{IEEE Trans. Signal Process.}, vol. 65, no. 7, pp. 1712--1727, 2017.
+\bibitem{xu2014} W. Xu, E.-W. Bai, and M. Cho, ``System identification in the presence of outliers and random noises: A compressed sensing approach,'' \emph{Automatica}, vol. 50, no. 11, pp. 2905--2911, 2014.
+\bibitem{bottegal2014} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Outlier robust system identification: A Bayesian kernel-based approach,'' in \emph{Proc. 19th IFAC World Congress}, vol. 47, no. 3, 2014, pp. 1073--1078.
+\bibitem{bottegal2016} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Robust EM kernel-based methods for linear system identification,'' \emph{Automatica}, vol. 67, pp. 114--126, 2016.
+\bibitem{masreliez1977} C. J. Masreliez and R. D. Martin, ``Robust Bayesian estimation for the linear model and robustifying the Kalman filter,'' \emph{IEEE Trans. Autom. Control}, vol. 22, no. 3, pp. 361--371, 1977.
+\bibitem{rousseeuw1993} P. J. Rousseeuw and C. Croux, ``Alternatives to the median absolute deviation,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 424, pp. 1273--1283, 1993.
+\bibitem{ljung1999} L. Ljung, \emph{System Identification: Theory for the User}, 2nd ed. Upper Saddle River, NJ, USA: Prentice-Hall, 1999.
+\bibitem{garnier2008} H. Garnier and L. Wang, Eds., \emph{Identification of Continuous-Time Models from Sampled Data}. London, U.K.: Springer, 2008.
+\end{thebibliography}
+\end{document}
