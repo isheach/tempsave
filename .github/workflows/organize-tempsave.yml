@@ -1,0 +1,39 @@
+name: Organize tempsave handoff
+
+on:
+  push:
+    paths:
+      - 'staging/tempsave_org_bundle.tar.gz'
+      - '.github/workflows/organize-tempsave.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  organize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify and extract handoff bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '1deb86170ba2055cef7ad428c6a286df604ab28aad5e988d3004180177b32143  staging/tempsave_org_bundle.tar.gz' | sha256sum -c -
+          tar -xzf staging/tempsave_org_bundle.tar.gz -C .
+          mv MANIFEST.sha256 HANDOFF_MANIFEST.sha256
+          sha256sum -c HANDOFF_MANIFEST.sha256
+
+      - name: Commit organized handoff workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md HANDOFF_MANIFEST.sha256 paper code records
+          git rm staging/tempsave_org_bundle.tar.gz
+          git rm .github/workflows/organize-tempsave.yml
+          git commit -m 'chore: organize GPT-6 paper handoff workspace'
+          git push
