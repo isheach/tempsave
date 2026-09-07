@@ -11,10 +11,11 @@ Read in this order:
 1. [`records/CURRENT_CONTEXT_FOR_GPT6.md`](records/CURRENT_CONTEXT_FOR_GPT6.md)
 2. [`paper/current/Revision21_code_aligned_EN.tex`](paper/current/Revision21_code_aligned_EN.tex)
 3. [`paper/current/Revision21_code_aligned_CN.tex`](paper/current/Revision21_code_aligned_CN.tex)
-4. [`code/README.md`](code/README.md) and restore the MATLAB source
-5. [`voice/逐句会议记录_2026-08-31.txt`](voice/逐句会议记录_2026-08-31.txt)
-6. [`records/MEETING_KEY_POINTS.md`](records/MEETING_KEY_POINTS.md)
-7. synthetic and real-data summaries under [`records/`](records/)
+4. [`code/current/all_in_one_outlier_experiment_500_verified_baseline.m`](code/current/all_in_one_outlier_experiment_500_verified_baseline.m)
+5. [`code/current/run_real_dataset_two_methods_fixed.m`](code/current/run_real_dataset_two_methods_fixed.m)
+6. [`voice/逐句会议记录_2026-08-31.txt`](voice/逐句会议记录_2026-08-31.txt)
+7. [`records/MEETING_KEY_POINTS.md`](records/MEETING_KEY_POINTS.md)
+8. synthetic and real-data summaries under [`records/`](records/)
 
 ## Current status
 
@@ -22,20 +23,14 @@ Read in this order:
 - Current clean English source: `paper/current/Revision21_code_aligned_EN.tex`
 - Current clean Chinese source: `paper/current/Revision21_code_aligned_CN.tex`
 - Current review baseline: **Revision 21 vs Revision 20**
-- Primary method implementation: `code/current/all_in_one_outlier_experiment_500_verified_baseline.m.gz`
-- Real-data adaptation: `code/current/run_real_dataset_two_methods_fixed.m.gz`
-
-Restore MATLAB source with:
-
-```bash
-python code/restore_current_code.py
-```
+- Primary method implementation: `code/current/all_in_one_outlier_experiment_500_verified_baseline.m`
+- Real-data adaptation: `code/current/run_real_dataset_two_methods_fixed.m`
 
 ## Repository layout
 
 ```text
 paper/current/      Current Revision 21 LaTeX and redline sources
-code/current/       Exact compressed MATLAB sources
+code/current/       Current MATLAB source files, directly readable
 records/            GPT-6 context, meeting notes, experiment summaries
 voice/              Exact 2026-08-31 meeting transcript
 meeting_audio/      Historical source audio (large; retained unchanged)
