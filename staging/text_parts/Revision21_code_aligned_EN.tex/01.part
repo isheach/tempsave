@@ -1,0 +1,120 @@
+The central idea of Downsampling is to partition the original output by sample index into lower-rate subsequences, thereby reducing the influence of outlying samples on any single identification sequence, and then search the resulting tree for a node that supports reliable continuous-time model identification. Once such a model is obtained, outliers are not declared on the downsampled subsequence itself. Instead, the model is returned to the original sampling rate and pointwise detection is performed from one-step prediction residuals over the complete output.
+
+\subsection{Continuous-Time Model Estimation}
+For prescribed numerator and denominator orders, write
+\begin{align}
+A(s;\theta)&=s^{n_a}+a_1s^{n_a-1}+\cdots+a_{n_a},\\
+B(s;\theta)&=b_0s^{n_b}+b_1s^{n_b-1}+\cdots+b_{n_b},
+\end{align}
+with
+\begin{equation}
+\theta=[a_1,\ldots,a_{n_a},b_0,\ldots,b_{n_b}]^{\mathsf T}.
+\end{equation}
+Let $A_x(\theta)$, $B_x(\theta)$, $C_x(\theta)$, and $D_x(\theta)$ denote a state-space realization of $G(s;\theta)$:
+\begin{align}
+\dot x(t)&=A_x(\theta)x(t)+B_x(\theta)u(t),\\
+y(t;\theta)&=C_x(\theta)x(t)+D_x(\theta)u(t).
+\end{align}
+For a sampling interval $T$, zero-order-hold sampling gives
+\begin{align}
+F_\theta&=\exp\!\left(A_x(\theta)T\right),\\
+H_\theta&=\int_0^T\exp\!\left(A_x(\theta)\tau\right)B_x(\theta)\,d\tau,
+\end{align}
+and the one-step prediction can be written as
+\begin{align}
+\hat x_{k+1}&=F_\theta\hat x_k+H_\theta u_k,\\
+\hat y_k(\theta,x_1)&=C_x(\theta)\hat x_k+D_x(\theta)u_k,
+\end{align}
+where $x_1$ is the initial state used for prediction.
+
+For the original measured output, the prediction error is
+\begin{equation}
+e_k(\theta,x_1)=\bar y_k-\hat y_k(\theta,x_1).
+\end{equation}
+The corresponding prediction-error criterion is
+\begin{equation}
+J(\theta,x_1)=\sum_{k=1}^{N_e}\left[e_k(\theta,x_1)\right]^2,
+\end{equation}
+and the parameter and initial-state estimates satisfy
+\begin{equation}
+(\hat\theta,\hat x_1)=\arg\min_{\theta\in\Theta_s,\,x_1}J(\theta,x_1),
+\end{equation}
+where $\Theta_s$ is the set of stable continuous-time models. When the initial state associated with the complete output is known, $x_1$ is fixed at that value. For a downsampled child sequence selected from the original output and starting at a nonzero physical time, the initial state is estimated together with the model parameters. Because $F_\theta$ and $H_\theta$ depend nonlinearly on $\theta$, the problem is solved iteratively by prediction-error minimization. If $\Psi_q$ denotes the prediction-sensitivity matrix and $\bm e_q$ the prediction-error vector at iteration $q$, a local damped least-squares step can be expressed as
+\begin{equation}
+(\Psi_q^{\mathsf T}\Psi_q+\lambda_qI)\Delta\theta_q
+=\Psi_q^{\mathsf T}\bm e_q,
+\end{equation}
+with parameter updates accepted when the prediction-error criterion decreases and the continuous-time model remains stable.
+
+\subsection{Downsampling Partition and Tree Search}
+The original-rate sequence forms the root of the search tree. Suppose the current node contains the time-ordered sample indices
+\begin{equation}
+\mathcal I=\{i_1,i_2,\ldots,i_M\},
+\end{equation}
+where $M=|\mathcal I|$ and $M=N$ at the root. For a split count $K$, the node is divided into $K$ disjoint children,
+\begin{equation}
+\mathcal I_j=\{i_j,i_{j+K},i_{j+2K},\ldots\},\qquad j=1,\ldots,K.
+\end{equation}
+Each additional tree level multiplies the effective sampling interval by $K$. A child $j$ is identified only when $N_j=|\mathcal I_j|$ satisfies the minimum sequence-length requirement.
+
+Let $\bar y_{j,\ell}$ and $u_{j,\ell}$, $\ell=1,\ldots,N_j$, be the output and input selected by $\mathcal I_j$, and let $x_{j,1}$ be the child initial state. The child prediction-error criterion is
+\begin{equation}
+J_j(\theta,x_{j,1})=
+\sum_{\ell=1}^{N_j}
+\left[\bar y_{j,\ell}-\hat y_{j,\ell}(\theta,x_{j,1})\right]^2,
+\end{equation}
+with
+\begin{equation}
+(\hat\theta_j,\hat x_{j,1})=
+\arg\min_{\theta\in\Theta_s,\,x_{j,1}}J_j(\theta,x_{j,1}).
+\end{equation}
+The optimized residual sum of squares is
+\begin{equation}
+q_j=J_j(\hat\theta_j,\hat x_{j,1}).
+\end{equation}
+A child is accepted when
+\begin{equation}
+q_j<\varepsilon_R.
+\end{equation}
+If several children satisfy the criterion, the model with the smallest $q_j$ is returned. If no child is accepted, descendable children are visited in ascending $q_j$ order; a failed branch returns to its parent before the next child is examined. The final parameter estimate returned by the tree search is denoted by $\hat\theta_d$.
+
+\subsection{Residual-Based Outlier Detection}
+After the tree search returns $\hat\theta_d$, one-step predictions are recomputed for the complete output at the original sampling rate and denoted by
+\begin{equation}
+\hat y_{d,k}=\hat y_k(\hat\theta_d).
+\end{equation}
+The detection residual is
+\begin{equation}
+r_{d,k}=\bar y_k-\hat y_{d,k}.
+\end{equation}
+Define the complete residual collection
+\begin{equation}
+\mathcal R_d=\{r_{d,1},r_{d,2},\ldots,r_{d,N}\}.
+\end{equation}
+Its robust center and scale are
+\begin{align}
+m_d&=\med(\mathcal R_d),\\
+\mathrm{MAD}_d&=\med\left(\{|r_{d,k}-m_d|:k=1,\ldots,N\}\right),\\
+s_d&=1.4826\,\mathrm{MAD}_d.
+\end{align}
+The detected outlier set is
+\begin{equation}
+\Oh_d=\{k:|r_{d,k}-m_d|>\gamma_d s_d\}.
+\end{equation}
+
+\section{Multi-Scale Patch-Based Outlier Detection}
+The central idea of Patch is to alternate robust model estimation, local residual analysis, and outlier-output repair at the original sampling rate. Unlike Downsampling, Patch does not search for a lower-rate identification subsequence. Instead, it models the one-step prediction residual over multiple overlapping temporal scales, estimates the local nominal residual trend, and combines the outlier evidence across scales. The original measured output remains $\bar y_k$. The output after the $i$th repair is denoted by $\bar y_k^{(i)}$, $i=1,2,\ldots$. The first model is estimated from $\bar y_k$, whereas iteration $i\ge2$ uses the repaired output $\bar y_k^{(i-1)}$ from the previous iteration. In every iteration, however, the detection residual is formed against the original measured output $\bar y_k$.
+
+\subsection{Model Update and Detection Residual}
+At iteration $i$, the identification error is
+\begin{equation}
+e_k^{(i)}(\theta,x_1)=
+\begin{cases}
+\bar y_k-\hat y_k(\theta,x_1),& i=1,\\
+\bar y_k^{(i-1)}-\hat y_k(\theta,x_1),& i\ge2.
+\end{cases}
+\end{equation}
+Let
+\begin{align}
+m_e^{(i)}&=\med\left(\{e_k^{(i)}\}\right),\\
+\sigma_e^{(i)}&=\frac{1}{0.7}

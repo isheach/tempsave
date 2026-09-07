@@ -1,0 +1,205 @@
+writetable(comparison, result_excel_file, 'Sheet', 'Comparison');
+writetable(settings_table, result_excel_file, 'Sheet', 'Settings');
+writetable(dataset_validation, result_excel_file, ...
+    'Sheet', 'Dataset_Validation');
+
+fprintf('\n==================== FINAL COMPARISON ====================\n');
+disp(comparison);
+
+fprintf('\n==========================================================\n');
+fprintf('All experiments finished.\n');
+fprintf('MAT : %s\n', result_mat_file);
+fprintf('XLSX: %s\n', result_excel_file);
+fprintf('==========================================================\n');
+
+end
+
+
+%% ========================================================================
+%  Default configuration
+% ========================================================================
+
+function cfg = default_config()
+
+cfg = struct();
+
+% Shared Monte Carlo grid
+cfg.NumberOfSamples = 500;
+cfg.NumberOfExperiments = 100;
+cfg.OutlierCounts = [5, 10, 15];
+cfg.AmplitudeMultipliers = [0.25, 0.5, 1, 2, 4];
+
+% Reproducibility
+cfg.PositionRandomSeed = 20260906;
+cfg.AmplitudeRandomSeed = 20260907;
+
+% True continuous-time system
+cfg.TrueNumerator = 1;
+cfg.TrueDenominator = [1, 2, 1];
+cfg.SampleTime = 0.01;
+
+% Candidate outlier magnitudes inherited from the existing code_11 line
+cfg.BaseOutlierValues = [ ...
+     0.10; -0.10;  0.12; -0.12;  0.14; -0.14; ...
+     0.16; -0.16;  0.18; -0.18;  0.20; -0.20; ...
+     0.22; -0.22;  0.24; -0.24;  0.26; -0.26; ...
+     0.28; -0.28;  0.30; -0.30;  0.32; -0.32; ...
+     0.34; -0.34;  0.36; -0.36;  0.38; -0.38];
+
+% Known model structure
+cfg.NumberOfPoles = 2;
+cfg.NumberOfZeros = 0;
+cfg.KnownTransportDelay = 0;
+
+% Downsampling method
+cfg.DownSplitCount = 5;
+cfg.DownIdentificationRSSThreshold = 1e-8;
+cfg.DownMinimumSequenceLength = 20;
+cfg.DownGamma = 3.0;
+cfg.DownTFESTMaxIterations = 50;
+
+% Patch method
+cfg.PatchMaximumOuterIterations = 3;
+cfg.PatchRepairRelativeTolerance = 1e-8;
+cfg.PatchTFESTRobustErrorThreshold = 1.6;
+cfg.PatchTFESTMaxIterations = 50;
+cfg.PatchLengths = [31, 61, 121];
+cfg.PatchOverlapRatio = 0.50;
+cfg.PatchPolynomialOrder = 2;
+cfg.PatchIRLSIterations = 8;
+cfg.PatchBisquareTuningConstant = 4.685;
+cfg.PatchTargetSequenceFalseAlarmRate = 0.01;
+cfg.PatchMinimumMultiscaleSupport = 2;
+cfg.PatchScalePoolingStrength = 30;
+cfg.PatchAbsoluteScaleMinimum = 1e-10;
+cfg.PatchRelativeScaleFloor = 1e-6;
+
+% Parallel settings
+cfg.UseParallel = true;
+cfg.ParallelWorkerCount = [];  % [] -> MATLAB decides automatically
+
+end
+
+
+%% ========================================================================
+%  Toolbox / function checks
+% ========================================================================
+
+function check_required_functions()
+
+required_functions = { ...
+    'tf', 'lsim', ...
+    'iddata', 'idtf', 'tfest', 'tfestOptions', ...
+    'predict', 'predictOptions', 'isstable', 'tfdata', ...
+    'erfcinv', 'writetable'};
+
+missing = {};
+
+for k = 1:numel(required_functions)
+    if isempty(which(required_functions{k}))
+        missing{end+1} = required_functions{k}; %#ok<AGROW>
+    end
+end
+
+if ~isempty(missing)
+    error('all_in_one:MissingFunctions', ...
+        ['The following required MATLAB functions are unavailable:\n%s\n' ...
+         'Please check System Identification Toolbox and Control System Toolbox.'], ...
+        strjoin(missing, ', '));
+end
+
+end
+
+
+%% ========================================================================
+%  Dataset generation
+% ========================================================================
+
+function data = generate_dataset(cfg)
+
+validateattributes(cfg.NumberOfSamples, {'numeric'}, ...
+    {'scalar', 'integer', '>=', 10});
+validateattributes(cfg.NumberOfExperiments, {'numeric'}, ...
+    {'scalar', 'integer', 'positive'});
+
+N = cfg.NumberOfSamples;
+R = cfg.NumberOfExperiments;
+count_values = cfg.OutlierCounts(:).';
+mult_values = cfg.AmplitudeMultipliers(:).';
+
+if max(count_values) > N
+    error('all_in_one:TooManyOutliers', ...
+        'Maximum outlier count cannot exceed the sequence length.');
+end
+
+if max(count_values) > numel(cfg.BaseOutlierValues)
+    error('all_in_one:InsufficientBaseOutlierValues', ...
+        'BaseOutlierValues does not contain enough entries.');
+end
+
+Ts = cfg.SampleTime;
+t = (0:N-1).' * Ts;
+
+sys_true = tf(cfg.TrueNumerator, cfg.TrueDenominator);
+
+% Current-stage experiment: a unit-step sampled record generated directly
+% from the continuous-time system at the requested sample times.
+u_clean = ones(N, 1);
+y_clean = lsim(sys_true, u_clean, t);
+y_clean = real(y_clean(:));
+
+u_all = repmat(u_clean, 1, R);
+y_clean_all = repmat(y_clean, 1, R);
+
+position_stream = RandStream('mt19937ar', ...
+    'Seed', cfg.PositionRandomSeed);
+amplitude_stream = RandStream('mt19937ar', ...
+    'Seed', cfg.AmplitudeRandomSeed);
+
+maximum_outlier_count = max(count_values);
+
+permutation = randperm(amplitude_stream, ...
+    numel(cfg.BaseOutlierValues));
+fixed_outlier_values_order = ...
+    cfg.BaseOutlierValues(permutation(1:maximum_outlier_count));
+
+number_of_count_conditions = numel(count_values);
+number_of_multiplier_conditions = numel(mult_values);
+
+outlier_indices_all = nan(maximum_outlier_count, ...
+    R, number_of_count_conditions);
+
+% Keep positions fixed across amplitude multipliers for a fair comparison.
+for count_id = 1:number_of_count_conditions
+    current_count = count_values(count_id);
+
+    for experiment_id = 1:R
+        outlier_indices_all(1:current_count, experiment_id, count_id) = ...
+            randperm(position_stream, N, current_count).';
+    end
+end
+
+y_all = zeros(N, R, ...
+    number_of_count_conditions, number_of_multiplier_conditions);
+
+outlier_added_all = nan(maximum_outlier_count, R, ...
+    number_of_count_conditions, number_of_multiplier_conditions);
+
+for count_id = 1:number_of_count_conditions
+    current_count = count_values(count_id);
+    active_base_values = fixed_outlier_values_order(1:current_count);
+
+    for multiplier_id = 1:number_of_multiplier_conditions
+        current_multiplier = mult_values(multiplier_id);
+        active_added_values = current_multiplier * active_base_values;
+
+        for experiment_id = 1:R
+            active_indices = outlier_indices_all( ...
+                1:current_count, experiment_id, count_id);
+
+            current_y = y_clean_all(:, experiment_id);
+            current_y(active_indices) = ...
+                current_y(active_indices) + active_added_values;
+
+            y_all(:, experiment_id, count_id, multiplier_id) = ...
+                current_y;

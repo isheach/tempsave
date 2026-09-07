@@ -1,0 +1,82 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\newcommand{\med}{\operatorname{median}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\Oh}{\widehat{\mathcal O}}
+
+\title{基于下采样搜索与多尺度 Patch 分析的连续时间动态系统异常值检测}
+\author{Author Name}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文研究测量输出中含有大偏差时连续时间动态系统的模型驱动异常值检测问题。可靠的残差检测需要准确的动态模型，但模型本身又必须从可能已经含有异常值的测量数据中估计。为此，本文提出两种方法。下采样方法将采样数据按索引划分为低采样率子序列，并通过树搜索寻找能够支持可靠连续时间模型估计的子序列；获得模型后，在原采样率下利用中位数和中位数绝对偏差对完整输出的预测残差进行检测。Patch 方法直接在原采样率下工作，通过重叠的多尺度 Patch 对局部残差结构建模，利用稳健二次拟合、尺度池化、自适应阈值和多尺度支持定位异常样本，并通过修复与重新估计迭代更新模型。连续时间参数在稳定模型约束下由预测误差准则估计。受控仿真实验表明，两种方法在所测试的异常数量和幅值范围内均具有较高的检测精度。
+\end{abstract}
+
+\begin{IEEEkeywords}
+异常值检测，连续时间系统辨识，下采样，预测残差，多尺度 Patch，稳健统计。
+\end{IEEEkeywords}
+
+\section{引言}
+动态输入--输出数据中的异常值检测与系统辨识密切相关。只有当辨识模型能够足够准确地描述正常系统动态时，预测残差才能可靠地反映异常测量；然而模型本身又是由可能已经包含异常值的数据估计得到的。因此，异常测量可能使模型产生偏差，而存在偏差的模型又可能在正常样本处产生较大的残差。
+
+经典时间序列研究通过干预分析与稳健估计处理这一耦合问题。针对加性异常和创新异常的迭代方法可以联合估计模型参数与异常影响 \cite{chang1988,chen1993}；稳健 ARMA 方法则通过有界残差或稳健损失降低异常观测的影响 \cite{bustos1986,muler2009,muma2017}。在系统辨识领域，也有工作利用显式大偏差模型或重尾观测模型减小异常输出对参数估计的影响 \cite{xu2014,bottegal2014,bottegal2016}。这些研究表明，稳健模型估计与逐点异常值定位相关，但并不是同一个问题。
+
+当可靠的动态模型已经获得后，测量输出与模型预测之间的差异自然可以作为异常值判据。稳健滤波中的创新量体现了同样的思想 \cite{masreliez1977}，而中位数与中位数绝对偏差（median absolute deviation, MAD）等稳健位置和尺度统计量能够避免少量大残差主导全局阈值 \cite{rousseeuw1993}。实际中仍存在两个困难：原采样率数据可能受到较强污染而无法直接支持可靠辨识；同时，正常残差还可能存在局部结构，无法由单一的全局尺度充分描述。
+
+本文从两个方向处理上述问题。下采样方法将样本划分为多个低采样率子序列，并在树结构中搜索能够支持准确连续时间模型辨识的子序列。获得模型后，将其用于原采样率完整输出的一步预测，并采用稳健全局残差统计定位异常值。Patch 方法在原采样率残差上构造多个重叠窗口，利用稳健二次拟合估计局部正常残差趋势，在同尺度重叠 Patch 与不同尺度之间进行融合，并通过自适应阈值和多尺度支持确定异常样本；检测后的样本被修复，并用于下一轮模型估计。
+
+本文的主要贡献概括如下：
+\begin{enumerate}
+\item 提出一种基于下采样树搜索的连续时间模型恢复方法，将可靠模型辨识与原采样率下的逐点异常值定位分离；
+\item 提出一种迭代多尺度 Patch 方法，将局部稳健残差建模、尺度池化、自适应评分、多尺度支持以及模型驱动的输出修复结合起来。
+\end{enumerate}
+
+本文其余部分安排如下。第二节给出问题描述；第三节介绍下采样方法；第四节介绍多尺度 Patch 方法；第五节给出仿真实验；第六节总结全文。
+
+\section{问题描述}
+考虑连续时间单输入单输出线性时不变系统
+\begin{equation}
+G(s;\theta)=\frac{B(s;\theta)}{A(s;\theta)},
+\end{equation}
+其中 $A$ 和 $B$ 分别为分母与分子多项式，$\theta$ 包含其中的未知系数。输入 $u(t)$ 与正常输出 $y(t)$ 以采样周期 $T_s$ 采样，得到 $u_k$ 与 $y_k$，$k=1,\ldots,N$。原始测量输出记为
+\begin{equation}
+\bar y_k=y_k+\varepsilon_k,
+\end{equation}
+其中正常样本满足 $\varepsilon_k=0$，异常样本满足 $\varepsilon_k\neq0$。本文的目标是在辨识过程中不使用异常位置先验信息的情况下，获得能够描述正常动态的模型，并确定 $\varepsilon_k\neq0$ 的样本位置。
+
+\section{基于下采样的异常值检测}
+下采样方法的核心思路是先将原始输出按采样索引划分为若干低采样率子序列，以降低异常样本对单个辨识序列的影响，再在这些子序列构成的树中搜索能够支持可靠连续时间模型辨识的节点。获得模型后，异常值并不在下采样子序列上直接判定，而是回到原采样率输出，根据完整输出的一步预测残差进行逐点检测。
+
+\subsection{连续时间模型估计}
+给定分母与分子阶次，写成
+\begin{align}
+A(s;\theta)&=s^{n_a}+a_1s^{n_a-1}+\cdots+a_{n_a},\\
+B(s;\theta)&=b_0s^{n_b}+b_1s^{n_b-1}+\cdots+b_{n_b},
+\end{align}
+参数向量为
+\begin{equation}
+\theta=[a_1,\ldots,a_{n_a},b_0,\ldots,b_{n_b}]^{\mathsf T}.
+\end{equation}
+用 $A_x(\theta)$、$B_x(\theta)$、$C_x(\theta)$ 和 $D_x(\theta)$ 表示 $G(s;\theta)$ 的状态空间实现：
+\begin{align}
+\dot x(t)&=A_x(\theta)x(t)+B_x(\theta)u(t),\\
+y(t;\theta)&=C_x(\theta)x(t)+D_x(\theta)u(t).
+\end{align}
+对于采样周期 $T$，零阶保持得到
+\begin{align}
+F_\theta&=\exp\!\left(A_x(\theta)T\right),\\
+H_\theta&=\int_0^T\exp\!\left(A_x(\theta)\tau\right)B_x(\theta)\,d\tau,
+\end{align}
+于是一步预测可写为
+\begin{align}

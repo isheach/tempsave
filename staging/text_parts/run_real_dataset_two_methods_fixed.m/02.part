@@ -1,0 +1,274 @@
+fprintf('Results: %s\n', xlsx_file);
+fprintf('============================================================\n');
+
+end
+
+
+%% ========================================================================
+% Configuration
+% ========================================================================
+
+function cfg = default_config()
+
+cfg = struct();
+
+% Empty => run every supported dataset discovered below dataset_root.
+% Examples:
+%   ["CalIt2","Dodgers"]
+%   ["GutenTAG/ecg-noise-10%"]
+cfg.DatasetFilter = strings(0,1);
+
+% Common autoregressive structure search.
+cfg.BaseOrderCandidates = [1 2 3 5 8 12 16 20];
+cfg.MaxSeasonLag = 600;
+cfg.NumberOfPeriodCandidates = 4;
+cfg.MinimumPeriodCorrelation = 0.15;
+cfg.MinimumRowsPerParameter = 5;
+cfg.RidgeRelative = 1e-8;
+cfg.StructureTrimFraction = 0.10;
+cfg.StructureTrimIterations = 3;
+
+% Threshold tuning.
+cfg.GammaCandidates = 2.0:0.10:8.0;
+cfg.NormalTrainingFalsePositiveRate = 0.005;
+cfg.UnsupervisedDownGamma = 3.0;
+cfg.UnsupervisedPatchGamma = 4.265;
+
+% Downsampling.
+cfg.DownSplitCount = 5;
+cfg.DownMaximumDepth = 3;
+cfg.DownMinimumTargetRows = 40;
+cfg.DownRobustFitIterations = 3;
+cfg.DownFitTrimFraction = 0.10;
+
+% Patch.
+cfg.PatchWindowLengths = [31 61 121];
+cfg.PatchOverlapRatio = 0.50;
+cfg.PatchPolynomialOrder = 2;
+cfg.PatchIRLSIterations = 6;
+cfg.PatchBisquareTuningConstant = 4.685;
+cfg.PatchMaximumOuterIterations = 4;
+cfg.PatchFitTrimFraction = 0.10;
+cfg.PatchRepairTolerance = 1e-6;
+
+% Numerical protection only for divisions.  This is NOT a detector floor.
+cfg.MinimumScale = 1e-12;
+
+cfg.OutputDirectory = 'real_dataset_two_method_results_fixed';
+
+% Save accumulated result rows every N datasets.  Set to 0 to disable.
+cfg.CheckpointEvery = 10;
+
+end
+
+
+function out = merge_struct(base, override)
+
+out = base;
+
+if isempty(override)
+    return;
+end
+
+names = fieldnames(override);
+
+for k = 1:numel(names)
+    out.(names{k}) = override.(names{k});
+end
+
+end
+
+
+%% ========================================================================
+% Dataset discovery and reading
+% ========================================================================
+
+function specs = discover_datasets(root, cfg)
+
+test_files = [ ...
+    dir(fullfile(root, '**', 'test.csv')); ...
+    dir(fullfile(root, '**', '*.test.csv'))];
+
+% Remove accidental duplicates.
+all_paths = strings(numel(test_files),1);
+
+for k = 1:numel(test_files)
+    all_paths(k) = string(fullfile( ...
+        test_files(k).folder, test_files(k).name));
+end
+
+[~, unique_ids] = unique(all_paths, 'stable');
+test_files = test_files(unique_ids);
+
+specs = repmat(struct( ...
+    'Name',"", ...
+    'Collection',"", ...
+    'TestPath',"", ...
+    'TrainNormalPath',"", ...
+    'TrainAnomalyPath',""), 0, 1);
+
+for k = 1:numel(test_files)
+
+    test_path = string(fullfile( ...
+        test_files(k).folder, test_files(k).name));
+
+    relative = erase(test_path, string(root) + filesep);
+    relative = replace(relative, filesep, "/");
+
+    [folder, filename, ~] = fileparts(test_path);
+
+    if filename == "test"
+        relative_folder = erase(string(folder), ...
+            string(root) + filesep);
+        relative_folder = replace(relative_folder, filesep, "/");
+        dataset_name = relative_folder;
+
+        train_normal_path = string(fullfile( ...
+            folder, 'train_no_anomaly.csv'));
+
+        train_anomaly_path = string(fullfile( ...
+            folder, 'train_anomaly.csv'));
+
+        if ~isfile(train_normal_path)
+            train_normal_path = "";
+        end
+
+        if ~isfile(train_anomaly_path)
+            train_anomaly_path = "";
+        end
+
+    else
+        % CalIt2 / Dodgers style: *.test.csv
+        relative_folder = erase(string(folder), ...
+            string(root) + filesep);
+        relative_folder = replace(relative_folder, filesep, "/");
+        dataset_name = relative_folder + "/" + filename;
+
+        train_normal_path = "";
+        train_anomaly_path = "";
+    end
+
+    if ~dataset_passes_filter(dataset_name, cfg.DatasetFilter)
+        continue;
+    end
+
+    parts = split(dataset_name, "/");
+    collection = parts(1);
+
+    spec = struct();
+    spec.Name = dataset_name;
+    spec.Collection = collection;
+    spec.TestPath = test_path;
+    spec.TrainNormalPath = train_normal_path;
+    spec.TrainAnomalyPath = train_anomaly_path;
+
+    specs(end+1,1) = spec; %#ok<AGROW>
+end
+
+if ~isempty(specs)
+    [~, order] = sort(string({specs.Name}));
+    specs = specs(order);
+end
+
+end
+
+
+function tf = dataset_passes_filter(name, filters)
+
+filters = string(filters);
+
+if isempty(filters)
+    tf = true;
+    return;
+end
+
+tf = false;
+
+for k = 1:numel(filters)
+    if contains(lower(name), lower(filters(k)))
+        tf = true;
+        return;
+    end
+end
+
+end
+
+
+function data = read_benchmark_csv(path)
+
+T = readtable(path, ...
+    'VariableNamingRule','preserve', ...
+    'TextType','string');
+
+names = string(T.Properties.VariableNames);
+names_lower = lower(names);
+
+label_candidates = [ ...
+    "is_anomaly","anomaly","label","labels", ...
+    "target","is_outlier","outlier"];
+
+label_id = find(ismember(names_lower, label_candidates), 1);
+
+if isempty(label_id)
+    error('realbench:MissingLabel', ...
+        'No anomaly-label column was found in %s.', path);
+end
+
+time_candidates = ["timestamp","time","datetime","date","index"];
+time_ids = find(ismember(names_lower, time_candidates));
+
+numeric_ids = [];
+
+for j = 1:width(T)
+
+    if j == label_id || ismember(j,time_ids)
+        continue;
+    end
+
+    column = T{:,j};
+
+    if isnumeric(column) || islogical(column)
+        numeric_ids(end+1) = j; %#ok<AGROW>
+    else
+        converted = str2double(string(column));
+
+        if all(isfinite(converted) | ismissing(string(column)))
+            T{:,j} = converted;
+            numeric_ids(end+1) = j; %#ok<AGROW>
+        end
+    end
+end
+
+if isempty(numeric_ids)
+    error('realbench:NoNumericFeatures', ...
+        'No numeric time-series channel was found in %s.', path);
+end
+
+Y = double(T{:,numeric_ids});
+label = double(T{:,label_id});
+
+label(~isfinite(label)) = 0;
+label = label ~= 0;
+
+% Fill isolated missing values without using labels.
+for j = 1:size(Y,2)
+    yj = Y(:,j);
+
+    if any(~isfinite(yj))
+        yj = fillmissing(yj,'linear','EndValues','nearest');
+    end
+
+    Y(:,j) = yj;
+end
+
+if any(~isfinite(Y),'all')
+    error('realbench:NonfiniteData', ...
+        'Feature matrix remains nonfinite after interpolation: %s', path);
+end
+
+data = struct();
+data.Y = Y;
+data.Label = label(:);
+data.FeatureNames = names(numeric_ids);
+data.Path = string(path);
+

@@ -1,0 +1,218 @@
+    'DetectedCount', 'TP', 'FP', 'FN', 'TN', ...
+    'Precision', 'Recall', 'F1', 'ExactMatch', ...
+    'ParameterRelativeError', ...
+    'FoundDepth', 'FoundRSS', ...
+    'VisitedNodeCount', 'EvaluatedModelCount', ...
+    'FailedIdentificationCount', ...
+    'DetectedIndices', 'LastError'});
+
+condition_summary = summarize_detection_results( ...
+    result_table, count_values, mult_values, ...
+    'downsampling');
+
+end
+
+
+function result = run_one_downsampling_task( ...
+    task_id, experiment_ids, count_ids, multiplier_ids, data, cfg)
+
+warning('off', 'all');
+
+experiment_id = experiment_ids(task_id);
+count_id = count_ids(task_id);
+multiplier_id = multiplier_ids(task_id);
+
+current_count = data.outlier_count_values(count_id);
+
+y = data.y_all(:, experiment_id, count_id, multiplier_id);
+u = data.u_all(:, experiment_id);
+
+true_indices = data.outlier_indices_all( ...
+    1:current_count, experiment_id, count_id);
+
+N = numel(y);
+
+detected_indices = zeros(0, 1);
+parameter_error = NaN;
+last_error = '';
+
+search_result = default_down_search_result();
+
+try
+    search_result = search_downsampling_tree( ...
+        y(:), u(:), (1:N).', data.Ts, ...
+        cfg.DownSplitCount, ...
+        cfg.DownMinimumSequenceLength, ...
+        cfg.DownIdentificationRSSThreshold, ...
+        cfg.NumberOfPoles, cfg.NumberOfZeros, ...
+        cfg.KnownTransportDelay, ...
+        cfg.DownTFESTMaxIterations, ...
+        0);
+catch search_error
+    last_error = sprintf('%s: %s', ...
+        class(search_error), search_error.message);
+end
+
+if search_result.Found
+    try
+        full_data = iddata(y(:), u(:), data.Ts);
+        full_data.TimeUnit = 'seconds';
+        full_data.InterSample = 'zoh';
+
+        % V3-B: the original complete record starts from the known
+        % zero initial state used by the simulation.
+        y_prediction = one_step_predict( ...
+            search_result.System, full_data, 'zero');
+
+        residual = y(:) - y_prediction;
+
+        valid_mask = isfinite(residual);
+        valid_residual = residual(valid_mask);
+
+        if ~isempty(valid_residual)
+            residual_center = median(valid_residual);
+            residual_scale = corrected_mad(valid_residual);
+
+            if isfinite(residual_scale) && residual_scale > eps
+                detected_mask = valid_mask & ...
+                    abs(residual - residual_center) > ...
+                    cfg.DownGamma * residual_scale;
+                detected_indices = find(detected_mask);
+            end
+        end
+
+        parameter_error = continuous_parameter_relative_error( ...
+            search_result.System, ...
+            data.true_numerator, data.true_denominator);
+
+    catch detection_error
+        last_error = sprintf('%s | detection: %s: %s', ...
+            last_error, class(detection_error), ...
+            detection_error.message);
+    end
+end
+
+[TP, FP, FN, TN] = confusion_counts( ...
+    true_indices, detected_indices, N);
+
+P = safe_divide(TP, TP + FP);
+R = safe_divide(TP, TP + FN);
+F1 = safe_divide(2 * P * R, P + R);
+
+true_sorted = sort(unique(true_indices(:)));
+detected_sorted = sort(unique(detected_indices(:)));
+
+result = struct();
+result.IdentificationSucceeded = search_result.Found;
+result.DetectedIndices = detected_sorted;
+result.DetectedCount = numel(detected_sorted);
+result.TP = TP;
+result.FP = FP;
+result.FN = FN;
+result.TN = TN;
+result.Precision = P;
+result.Recall = R;
+result.F1 = F1;
+result.ExactMatch = search_result.Found && ...
+    isequal(true_sorted, detected_sorted);
+result.ParameterRelativeError = parameter_error;
+result.FoundDepth = search_result.Depth;
+result.FoundRSS = search_result.RSS;
+result.VisitedNodeCount = search_result.VisitedNodeCount;
+result.EvaluatedModelCount = search_result.EvaluatedModelCount;
+result.FailedIdentificationCount = ...
+    search_result.FailedIdentificationCount;
+result.LastError = last_error;
+
+end
+
+
+function result = search_downsampling_tree( ...
+    y, u, parent_indices, parent_Ts, ...
+    K, minimum_sequence_length, rss_threshold, ...
+    number_of_poles, number_of_zeros, known_delay, ...
+    tfest_max_iterations, depth)
+
+result = default_down_search_result();
+result.Depth = depth;
+result.VisitedNodeCount = 1;
+
+M = numel(parent_indices);
+
+child_indices = cell(K, 1);
+child_systems = cell(K, 1);
+child_rss = inf(K, 1);
+
+for child_id = 1:K
+    local_positions = child_id:K:M;
+    current_indices = parent_indices(local_positions);
+    child_indices{child_id} = current_indices;
+
+    if numel(current_indices) < minimum_sequence_length
+        continue;
+    end
+
+    child_Ts = parent_Ts * K;
+
+    try
+        child_y = y(current_indices);
+        child_u = u(current_indices);
+
+        [current_system, current_rss] = ...
+            identify_standard_ct_model( ...
+            child_y, child_u, child_Ts, ...
+            number_of_poles, number_of_zeros, ...
+            known_delay, tfest_max_iterations);
+
+        child_systems{child_id} = current_system;
+        child_rss(child_id) = current_rss;
+        result.EvaluatedModelCount = ...
+            result.EvaluatedModelCount + 1;
+
+    catch
+        result.FailedIdentificationCount = ...
+            result.FailedIdentificationCount + 1;
+    end
+end
+
+% Accept the best child that meets the criterion.
+accepted_ids = find(child_rss < rss_threshold);
+
+if ~isempty(accepted_ids)
+    [~, local_best] = min(child_rss(accepted_ids));
+    best_id = accepted_ids(local_best);
+
+    result.Found = true;
+    result.System = child_systems{best_id};
+    result.RSS = child_rss(best_id);
+    result.Depth = depth + 1;
+    return;
+end
+
+% Otherwise descend in optimized-RSS order and backtrack as needed.
+[~, visit_order] = sort(child_rss, 'ascend');
+
+for order_id = 1:numel(visit_order)
+    child_id = visit_order(order_id);
+
+    if ~isfinite(child_rss(child_id))
+        continue;
+    end
+
+    current_indices = child_indices{child_id};
+
+    % Another split must still be able to produce children long enough
+    % to support identification.
+    if floor(numel(current_indices) / K) < minimum_sequence_length
+        continue;
+    end
+
+    child_result = search_downsampling_tree( ...
+        y, u, current_indices, parent_Ts * K, ...
+        K, minimum_sequence_length, rss_threshold, ...
+        number_of_poles, number_of_zeros, known_delay, ...
+        tfest_max_iterations, depth + 1);
+
+    result.VisitedNodeCount = result.VisitedNodeCount + ...
+        child_result.VisitedNodeCount;
+    result.EvaluatedModelCount = result.EvaluatedModelCount + ...

@@ -1,0 +1,79 @@
+Precision measures the fraction of detected samples that are true outliers, recall measures the fraction of true outliers that are detected, and F1 is their harmonic mean.
+
+\begin{table*}[t]
+\centering
+\caption{Downsampling detection results for different outlier counts and amplitude multipliers (100 experiments per row).}
+\label{tab:down}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+Outliers & Mult. & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&0.50&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&1.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&2.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&4.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+10&0.25&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&0.50&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&1.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&2.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&4.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+15&0.25&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&0.50&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&1.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&2.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&4.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{Patch detection results for different outlier counts and amplitude multipliers (100 experiments per row).}
+\label{tab:patch}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+Outliers & Mult. & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&0.50&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&1.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&2.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&4.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+10&0.25&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&0.50&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&1.00&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&2.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+10&4.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+15&0.25&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&0.50&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&1.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&2.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&4.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+For Downsampling, mean TP equals the true outlier count and mean FN is zero in every condition, so recall is one throughout the tested range. The main loss comes from false positives in a small number of experiments: mean FP is $0.41$, $1.55$, and $1.05$ for 5, 10, and 15 outliers, respectively, producing F1 values between $0.9281$ and $0.9662$. Patch produces substantially fewer false positives. Mean FP is $0.04$ for 5 outliers, $0.02$--$0.04$ for 10 outliers, and $0.22$ for 15 outliers; mean FN is only $0.01$ for the 15-outlier case. Consequently, Patch maintains precision above $0.985$, recall close to one, and F1 between $0.9924$ and $0.9990$. In both methods, the results are nearly unchanged across the five amplitude multipliers under the current controlled conditions.
+
+\section{Conclusion}
+Two model-based outlier detection methods have been developed for continuous-time dynamic systems. Downsampling searches lower-rate child sequences for a node that supports reliable continuous-time model identification and applies the resulting model to robust residual detection on the complete original-rate output. Patch models original-rate residuals over multiple local scales, determines outliers through scale pooling, an adaptive threshold, and multi-scale support, and iteratively updates the model through repair and re-estimation. Controlled simulations show high recall for Downsampling and lower false-positive counts for Patch over the tested conditions. Future work will evaluate the methods under measurement noise, broader dynamic-system classes, and real measured data.
+
+\begin{thebibliography}{10}
+\bibitem{chang1988} I. Chang, G. C. Tiao, and C. Chen, ``Estimation of time series parameters in the presence of outliers,'' \emph{Technometrics}, vol. 30, no. 2, pp. 193--204, 1988.
+\bibitem{chen1993} C. Chen and L.-M. Liu, ``Joint estimation of model parameters and outlier effects in time series,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 421, pp. 284--297, 1993.
+\bibitem{bustos1986} O. H. Bustos and V. J. Yohai, ``Robust estimates for ARMA models,'' \emph{J. Amer. Stat. Assoc.}, vol. 81, no. 393, pp. 155--168, 1986.
+\bibitem{muler2009} N. Muler, D. Pe\~na, and V. J. Yohai, ``Robust estimation for ARMA models,'' \emph{Ann. Stat.}, vol. 37, no. 2, pp. 816--840, 2009.
+\bibitem{muma2017} M. Muma and A. M. Zoubir, ``Bounded influence propagation $\tau$-estimation: A new robust method for ARMA model estimation,'' \emph{IEEE Trans. Signal Process.}, vol. 65, no. 7, pp. 1712--1727, 2017.
+\bibitem{xu2014} W. Xu, E.-W. Bai, and M. Cho, ``System identification in the presence of outliers and random noises: A compressed sensing approach,'' \emph{Automatica}, vol. 50, no. 11, pp. 2905--2911, 2014.
+\bibitem{bottegal2014} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Outlier robust system identification: A Bayesian kernel-based approach,'' in \emph{Proc. 19th IFAC World Congress}, vol. 47, no. 3, 2014, pp. 1073--1078.
+\bibitem{bottegal2016} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Robust EM kernel-based methods for linear system identification,'' \emph{Automatica}, vol. 67, pp. 114--126, 2016.
+\bibitem{masreliez1977} C. J. Masreliez and R. D. Martin, ``Robust Bayesian estimation for the linear model and robustifying the Kalman filter,'' \emph{IEEE Trans. Autom. Control}, vol. 22, no. 3, pp. 361--371, 1977.
+\bibitem{rousseeuw1993} P. J. Rousseeuw and C. Croux, ``Alternatives to the median absolute deviation,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 424, pp. 1273--1283, 1993.
+\end{thebibliography}
+\end{document}

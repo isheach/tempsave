@@ -1,0 +1,317 @@
+out = struct();
+out.Score = score;
+out.ExpectedResidual = expected_residual;
+
+end
+
+
+function [trend,scale] = robust_polynomial_trend( ...
+    y, order, iterations, tuning_constant, minimum_scale)
+
+y = y(:);
+L = numel(y);
+
+x = linspace(-1,1,L).';
+
+X = ones(L,order+1);
+
+for p = 1:order
+    X(:,p+1) = x.^p;
+end
+
+valid = isfinite(y);
+
+if sum(valid) < order+1
+    trend = repmat(median(y(valid),'omitnan'),L,1);
+    scale = corrected_mad(y(valid));
+    return;
+end
+
+coeff = X(valid,:) \ y(valid);
+
+for iteration_id = 1:max(1,iterations)
+
+    fitted = X*coeff;
+    e = y-fitted;
+
+    scale = corrected_mad(e(valid));
+
+    if ~isfinite(scale) || scale < minimum_scale
+        scale = max(std(e(valid)),minimum_scale);
+    end
+
+    u = e/(tuning_constant*scale);
+
+    w = zeros(L,1);
+    inside = valid & abs(u)<1;
+    w(inside) = (1-u(inside).^2).^2;
+
+    if sum(w>0)<order+1
+        break;
+    end
+
+    sw = sqrt(w);
+    Xw = bsxfun(@times,X,sw);
+    yw = y.*sw;
+
+    new_coeff = Xw \ yw;
+
+    if norm(new_coeff-coeff) <= ...
+            1e-8*max(1,norm(coeff))
+        coeff = new_coeff;
+        break;
+    end
+
+    coeff = new_coeff;
+end
+
+trend = X*coeff;
+e = y-trend;
+scale = corrected_mad(e(valid));
+
+if ~isfinite(scale) || scale<minimum_scale
+    scale = max(std(e(valid)),minimum_scale);
+end
+
+end
+
+
+function starts = make_window_starts(N,L,stride)
+
+last_start = N-L+1;
+
+if last_start < 1
+    starts = 1;
+    return;
+end
+
+starts = 1:stride:last_start;
+
+if starts(end) ~= last_start
+    starts(end+1) = last_start;
+end
+
+starts = unique(starts,'stable');
+
+end
+
+
+%% ========================================================================
+% Shared predictor / residual helpers
+% ========================================================================
+
+function model = fit_model_on_full_record( ...
+    Y,lags,cfg,trim_fraction)
+
+[X,T,~] = make_var_design(Y,lags,[]);
+
+if size(X,1) <= size(X,2)+1
+    error('realbench:TooFewRowsForModel', ...
+        'Too few rows to estimate selected VAR structure.');
+end
+
+model = fit_var_robust( ...
+    X,T,lags,size(Y,2),cfg.RidgeRelative, ...
+    trim_fraction,cfg.StructureTrimIterations);
+
+end
+
+
+function [prediction,residual,valid] = ...
+    predict_var_complete(Y,model,lags)
+
+N = size(Y,1);
+d = size(Y,2);
+
+prediction = nan(N,d);
+residual = nan(N,d);
+valid = false(N,1);
+
+[X,~,targets] = make_var_design(Y,lags,[]);
+
+P = X*model.Beta;
+
+prediction(targets,:) = P;
+residual(targets,:) = Y(targets,:)-P;
+valid(targets) = all(isfinite(P),2);
+
+end
+
+
+function score = global_residual_score(Y,model,lags,cfg)
+
+[~,residual,valid] = ...
+    predict_var_complete(Y,model,lags);
+
+score = standardized_global_residual( ...
+    residual,valid,cfg.MinimumScale);
+
+end
+
+
+function [score,center,scale] = ...
+    standardized_global_residual( ...
+    residual,valid,minimum_scale)
+
+d = size(residual,2);
+
+center = zeros(1,d);
+scale = ones(1,d);
+z = nan(size(residual));
+
+for channel_id = 1:d
+
+    r = residual(valid,channel_id);
+    r = r(isfinite(r));
+
+    center(channel_id) = median(r);
+    scale(channel_id) = corrected_mad(r);
+
+    if ~isfinite(scale(channel_id)) || ...
+            scale(channel_id)<minimum_scale
+        scale(channel_id) = ...
+            max(std(r),minimum_scale);
+    end
+
+    z(:,channel_id) = ...
+        abs(residual(:,channel_id)-center(channel_id)) / ...
+        scale(channel_id);
+end
+
+score = max(z,[],2,'omitnan');
+score(~valid) = NaN;
+
+end
+
+
+function value = corrected_mad(x)
+
+x = x(:);
+x = x(isfinite(x));
+
+if isempty(x)
+    value = NaN;
+    return;
+end
+
+m = median(x);
+value = 1.482602218505602 * median(abs(x-m));
+
+end
+
+
+function value = simple_quantile(x,q)
+
+x = sort(x(isfinite(x)));
+
+if isempty(x)
+    value = NaN;
+    return;
+end
+
+q = min(max(q,0),1);
+
+position = 1+(numel(x)-1)*q;
+lo = floor(position);
+hi = ceil(position);
+
+if lo==hi
+    value = x(lo);
+else
+    a = position-lo;
+    value = (1-a)*x(lo)+a*x(hi);
+end
+
+end
+
+
+%% ========================================================================
+% Metrics and output
+% ========================================================================
+
+function m = binary_metrics(true_label,detected)
+
+true_label = logical(true_label(:));
+detected = logical(detected(:));
+
+if numel(true_label) ~= numel(detected)
+    error('realbench:MetricLengthMismatch', ...
+        'True and detected masks have different lengths.');
+end
+
+TP = sum(true_label & detected);
+TN = sum(~true_label & ~detected);
+FP = sum(~true_label & detected);
+FN = sum(true_label & ~detected);
+
+precision = safe_divide(TP,TP+FP);
+recall = safe_divide(TP,TP+FN);
+specificity = safe_divide(TN,TN+FP);
+f1 = safe_divide(2*precision*recall,precision+recall);
+accuracy = safe_divide(TP+TN,numel(true_label));
+balanced = mean([recall,specificity],'omitnan');
+
+den = sqrt( ...
+    (TP+FP)*(TP+FN)*(TN+FP)*(TN+FN));
+
+if den>0
+    mcc = (TP*TN-FP*FN)/den;
+else
+    mcc = NaN;
+end
+
+m = struct();
+m.TP = TP;
+m.TN = TN;
+m.FP = FP;
+m.FN = FN;
+m.Precision = precision;
+m.Recall = recall;
+m.Specificity = specificity;
+m.F1 = f1;
+m.Accuracy = accuracy;
+m.BalancedAccuracy = balanced;
+m.MCC = mcc;
+
+end
+
+
+function value = safe_divide(a,b)
+
+if b==0
+    value = NaN;
+else
+    value = a/b;
+end
+
+end
+
+
+function row = make_summary_row( ...
+    dataset_name,method_name,test_data,structure,gamma,metrics,method)
+
+row = { ...
+    dataset_name, method_name, ...
+    size(test_data.Y,1), size(test_data.Y,2), ...
+    sum(test_data.Label), gamma, ...
+    mat2str(structure.Lags), ...
+    metrics.TP, metrics.TN, metrics.FP, metrics.FN, ...
+    metrics.Precision, metrics.Recall, metrics.Specificity, ...
+    metrics.F1, metrics.Accuracy, ...
+    metrics.BalancedAccuracy, metrics.MCC, ...
+    sum(method.DetectedMask), method.Aux1, method.Aux2};
+
+end
+
+
+function names = summary_variable_names()
+
+names = { ...
+    'Dataset','Method','Length','Dimensions', ...
+    'TrueAnomalyPoints','Gamma','SelectedLags', ...
+    'TP','TN','FP','FN','Precision','Recall','Specificity', ...
+    'F1','Accuracy','BalancedAccuracy','MCC', ...
+    'DetectedPoints','MethodAux1','MethodAux2'};
+
+end
+

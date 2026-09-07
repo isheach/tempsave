@@ -1,0 +1,204 @@
+    previous_repaired_output = repaired_output;
+    working_output = repaired_output;
+end
+
+if ~isempty(final_system)
+    try
+        parameter_error = continuous_parameter_relative_error( ...
+            final_system, data.true_numerator, data.true_denominator);
+    catch
+        parameter_error = NaN;
+    end
+end
+
+[TP, FP, FN, TN] = confusion_counts( ...
+    true_outlier_indices, detected_indices, N);
+
+P = safe_divide(TP, TP + FP);
+R = safe_divide(TP, TP + FN);
+F1 = safe_divide(2 * P * R, P + R);
+
+true_sorted = sort(unique(true_outlier_indices(:)));
+detected_sorted = sort(unique(detected_indices(:)));
+
+finite_scores = patch_score(isfinite(patch_score));
+if isempty(finite_scores)
+    maximum_patch_score = NaN;
+else
+    maximum_patch_score = max(finite_scores);
+end
+
+result = struct();
+result.IdentificationSucceeded = identification_succeeded;
+result.DetectionEvaluated = detection_evaluated;
+result.IterationConverged = iteration_converged;
+result.PrecleanFallbackUsed = preclean_fallback_used;
+result.OuterIterationCount = completed_iteration_count;
+result.IdentificationFitPercent = identification_fit_percent;
+result.DetectedIndices = detected_sorted;
+result.DetectedCount = numel(detected_sorted);
+result.TP = TP;
+result.FP = FP;
+result.FN = FN;
+result.TN = TN;
+result.Precision = P;
+result.Recall = R;
+result.F1 = F1;
+result.ExactMatch = detection_evaluated && ...
+    isequal(true_sorted, detected_sorted);
+result.RMSEBefore = sqrt(mean((y - y_clean).^2));
+result.RMSEAfter = sqrt(mean((repaired_output - y_clean).^2));
+result.ParameterRelativeError = parameter_error;
+result.AdaptiveScoreThreshold = adaptive_score_threshold;
+result.GlobalNoiseScale = global_noise_scale;
+result.MaximumPatchScore = maximum_patch_score;
+result.LastError = last_error;
+
+end
+
+
+function [identified_system, model_prediction, fit_percent] = ...
+    identify_robust_ct_model( ...
+    output_for_identification, input_signal, Ts, ...
+    number_of_poles, number_of_zeros, known_delay, ...
+    robust_error_threshold, tfest_max_iterations)
+
+output_for_identification = output_for_identification(:);
+input_signal = input_signal(:);
+
+if numel(output_for_identification) ~= numel(input_signal)
+    error('all_in_one:PatchIdentificationSizeMismatch', ...
+        'Patch identification input/output lengths are different.');
+end
+
+if any(~isfinite(output_for_identification)) || ...
+        any(~isfinite(input_signal))
+    error('all_in_one:PatchNonfiniteIdentificationData', ...
+        'Patch identification data contains NaN/Inf.');
+end
+
+estimation_data = iddata( ...
+    output_for_identification, input_signal, Ts);
+estimation_data.TimeUnit = 'seconds';
+estimation_data.InterSample = 'zoh';
+
+options = tfestOptions;
+options.Display = 'off';
+options.InitializeMethod = 'all';
+options.InitialCondition = 'auto';
+options.InputInterSample = 'zoh';
+options.EnforceStability = true;
+options.EstimateCovariance = false;
+options.SearchOptions.MaxIterations = tfest_max_iterations;
+options.Advanced.ErrorThreshold = robust_error_threshold;
+
+initial_model = make_idtf_template( ...
+    number_of_poles, number_of_zeros, known_delay);
+
+[identified_system, ~] = tfest( ...
+    estimation_data, initial_model, options);
+
+if ~isstable(identified_system)
+    error('all_in_one:PatchUnstableIdentifiedModel', ...
+        'Patch identification returned an unstable model.');
+end
+
+% IMPORTANT: one-step-ahead prediction, not sim().
+% V3-B: Patch works on the complete record, whose initial state is known
+% to be zero in the current simulation.
+model_prediction = one_step_predict( ...
+    identified_system, estimation_data, 'zero');
+
+centered_output = output_for_identification - ...
+    mean(output_for_identification);
+
+fit_percent = 100 * (1 - norm( ...
+    output_for_identification - model_prediction, 2) / ...
+    max(norm(centered_output, 2), eps));
+
+end
+
+
+%% ========================================================================
+%  Adaptive multi-scale Patch detector
+% ========================================================================
+
+function [detected_indices, final_score, expected_signal, ...
+    scale_floor, adaptive_threshold, multiscale_support_count, ...
+    global_noise_scale, gaussian_familywise_threshold, ...
+    score_core_location, score_core_spread] = ...
+    multiscale_patch_detector(signal, cfg)
+
+signal = signal(:);
+N = numel(signal);
+
+if any(~isfinite(signal))
+    error('all_in_one:NonfinitePatchSignal', ...
+        'Patch detector input contains NaN/Inf.');
+end
+
+if any(cfg.PatchLengths > N)
+    error('all_in_one:PatchTooLong', ...
+        'At least one Patch length exceeds the sequence length.');
+end
+
+if cfg.PatchMinimumMultiscaleSupport > numel(cfg.PatchLengths)
+    error('all_in_one:InvalidPatchSupport', ...
+        'Minimum multi-scale support exceeds the number of scales.');
+end
+
+signal_level = max([1; abs(signal); max(signal) - min(signal)]);
+
+scale_floor = max( ...
+    cfg.PatchAbsoluteScaleMinimum, ...
+    cfg.PatchRelativeScaleFloor * signal_level);
+
+if N > 1
+    global_noise_scale = corrected_mad(diff(signal)) / sqrt(2);
+else
+    global_noise_scale = scale_floor;
+end
+
+if ~isfinite(global_noise_scale) || global_noise_scale < scale_floor
+    global_noise_scale = scale_floor;
+end
+
+number_of_scales = numel(cfg.PatchLengths);
+
+scale_trend = nan(N, number_of_scales);
+scale_score = nan(N, number_of_scales);
+
+for scale_id = 1:number_of_scales
+    L = cfg.PatchLengths(scale_id);
+
+    stride = max(1, round(L * (1 - cfg.PatchOverlapRatio)));
+    starts = make_patch_starts(N, L, stride);
+    number_of_patches = numel(starts);
+
+    trend_votes = nan(N, number_of_patches);
+    score_votes = nan(N, number_of_patches);
+
+    for patch_id = 1:number_of_patches
+        first_index = starts(patch_id);
+        indices = first_index:(first_index + L - 1);
+        patch_signal = signal(indices);
+
+        [fitted_trend, local_error, local_scale] = ...
+            robust_polynomial_patch_fit( ...
+            patch_signal, cfg.PatchPolynomialOrder, ...
+            cfg.PatchIRLSIterations, ...
+            cfg.PatchBisquareTuningConstant, ...
+            scale_floor);
+
+        omega = cfg.PatchScalePoolingStrength / ...
+            (L + cfg.PatchScalePoolingStrength);
+
+        pooled_scale = sqrt( ...
+            (1 - omega) * local_scale^2 + ...
+            omega * global_noise_scale^2);
+
+        adjusted_scale = max([ ...
+            local_scale, pooled_scale, scale_floor]);
+
+        local_score = abs(local_error) / adjusted_scale;
+

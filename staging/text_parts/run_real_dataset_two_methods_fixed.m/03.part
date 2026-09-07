@@ -1,0 +1,308 @@
+end
+
+
+function validate_channel_compatibility(test_data, train_normal, ...
+    train_labelled, dataset_name)
+
+d = size(test_data.Y,2);
+
+if ~isempty(train_normal) && size(train_normal.Y,2) ~= d
+    error('realbench:ChannelMismatch', ...
+        '%s: train_no_anomaly and test have different dimensions.', ...
+        dataset_name);
+end
+
+if ~isempty(train_labelled) && size(train_labelled.Y,2) ~= d
+    error('realbench:ChannelMismatch', ...
+        '%s: train_anomaly and test have different dimensions.', ...
+        dataset_name);
+end
+
+end
+
+
+function [source, mode] = choose_structure_source( ...
+    test_data, train_normal, train_labelled)
+
+if ~isempty(train_normal)
+    source = train_normal;
+    mode = "train_no_anomaly";
+
+elseif ~isempty(train_labelled)
+
+    % Preserve the original temporal adjacency.  Robust structure fitting
+    % trims the largest residual rows internally; we do not concatenate
+    % non-contiguous "normal" rows into an artificial time series.
+    source = train_labelled;
+    mode = "robust_train_anomaly";
+
+else
+    source = test_data;
+    mode = "robust_test_without_labels";
+end
+
+end
+
+
+%% ========================================================================
+% Structure selection
+% ========================================================================
+
+function structure = select_var_structure(Y, cfg)
+
+N = size(Y,1);
+d = size(Y,2);
+
+period_candidates = estimate_period_candidates( ...
+    Y, cfg.MaxSeasonLag, ...
+    cfg.NumberOfPeriodCandidates, ...
+    cfg.MinimumPeriodCorrelation);
+
+base_orders = cfg.BaseOrderCandidates;
+base_orders = base_orders(base_orders < N/10);
+
+candidate_lag_sets = {};
+
+for p = base_orders
+    candidate_lag_sets{end+1} = 1:p; %#ok<AGROW>
+
+    for s = period_candidates(:).'
+        seasonal = unique([ ...
+            1:p, max(1,s-1), s, min(N-1,s+1)]);
+        candidate_lag_sets{end+1} = seasonal; %#ok<AGROW>
+    end
+end
+
+if isempty(candidate_lag_sets)
+    candidate_lag_sets = {[1]};
+end
+
+best_bic = Inf;
+best_model = [];
+best_lags = [];
+
+for candidate_id = 1:numel(candidate_lag_sets)
+
+    lags = candidate_lag_sets{candidate_id};
+
+    if max(lags) >= N-5
+        continue;
+    end
+
+    [X, T, ~] = make_var_design(Y, lags, []);
+
+    k_parameters = size(X,2)*d;
+
+    if size(X,1) < ...
+            cfg.MinimumRowsPerParameter * max(1,size(X,2))
+        continue;
+    end
+
+    try
+        model = fit_var_robust( ...
+            X, T, lags, d, cfg.RidgeRelative, ...
+            cfg.StructureTrimFraction, ...
+            cfg.StructureTrimIterations);
+
+        E = T - X*model.Beta;
+        bic = multivariate_bic(E, k_parameters);
+
+        if isfinite(bic) && bic < best_bic
+            best_bic = bic;
+            best_model = model;
+            best_lags = lags;
+        end
+    catch
+    end
+end
+
+if isempty(best_model)
+    error('realbench:StructureSelectionFailed', ...
+        'Could not identify a valid autoregressive structure.');
+end
+
+structure = struct();
+structure.Lags = best_lags(:).';
+structure.BIC = best_bic;
+structure.PeriodCandidates = period_candidates(:).';
+
+end
+
+
+function periods = estimate_period_candidates( ...
+    Y, maximum_lag, maximum_count, minimum_correlation)
+
+N = size(Y,1);
+maximum_lag = min([maximum_lag, floor(N/4), N-2]);
+
+if maximum_lag < 3
+    periods = [];
+    return;
+end
+
+score = zeros(maximum_lag,1);
+
+for channel_id = 1:size(Y,2)
+
+    x = Y(:,channel_id);
+    x = x - median(x);
+
+    % Remove gross scale while preserving periodic shape.
+    s = corrected_mad(x);
+
+    if ~isfinite(s) || s <= eps
+        s = std(x);
+    end
+
+    if ~isfinite(s) || s <= eps
+        continue;
+    end
+
+    x = max(min(x, 8*s), -8*s);
+
+    nfft = 2^nextpow2(2*N-1);
+    f = fft(x,nfft);
+    ac = real(ifft(abs(f).^2));
+    ac = ac(1:maximum_lag+1);
+
+    if ac(1) <= eps
+        continue;
+    end
+
+    ac = ac/ac(1);
+    score = max(score, abs(ac(2:end)));
+end
+
+is_peak = false(maximum_lag,1);
+
+for k = 2:maximum_lag-1
+    if score(k) >= score(k-1) && ...
+            score(k) >= score(k+1) && ...
+            score(k) >= minimum_correlation
+        is_peak(k) = true;
+    end
+end
+
+ids = find(is_peak);
+
+if isempty(ids)
+    periods = [];
+    return;
+end
+
+[~, order] = sort(score(ids),'descend');
+ids = ids(order);
+ids = ids(1:min(maximum_count,numel(ids)));
+
+% score index 1 corresponds to lag 1.
+periods = ids(:).';
+
+end
+
+
+function [X, T, target_indices] = make_var_design( ...
+    Y, lags, requested_targets)
+
+N = size(Y,1);
+d = size(Y,2);
+maximum_lag = max(lags);
+
+if nargin < 3 || isempty(requested_targets)
+    target_indices = (maximum_lag+1:N).';
+else
+    target_indices = requested_targets(:);
+    target_indices = target_indices( ...
+        target_indices > maximum_lag & target_indices <= N);
+end
+
+n = numel(target_indices);
+
+X = ones(n, 1 + d*numel(lags));
+
+column = 2;
+
+for lag = lags(:).'
+    rows = target_indices-lag;
+    X(:,column:column+d-1) = Y(rows,:);
+    column = column+d;
+end
+
+T = Y(target_indices,:);
+
+end
+
+
+function model = fit_var_robust( ...
+    X, T, lags, d, ridge_relative, trim_fraction, iterations)
+
+active = true(size(X,1),1);
+Beta = zeros(size(X,2),d);
+
+for iteration_id = 1:max(1,iterations)
+
+    Xa = X(active,:);
+    Ta = T(active,:);
+
+    G = Xa.'*Xa;
+    lambda = ridge_relative * ...
+        max(trace(G)/max(size(G,1),1), 1);
+
+    penalty = eye(size(G));
+    penalty(1,1) = 0;
+
+    Beta = (G + lambda*penalty) \ (Xa.'*Ta);
+
+    E = T-X*Beta;
+    row_score = sqrt(sum(E.^2,2));
+
+    if trim_fraction <= 0 || iteration_id == iterations
+        break;
+    end
+
+    keep_count = max(size(X,2)+2, ...
+        floor((1-trim_fraction)*numel(row_score)));
+
+    [~, order] = sort(row_score,'ascend');
+
+    active = false(size(active));
+    active(order(1:min(keep_count,numel(order)))) = true;
+end
+
+model = struct();
+model.Beta = Beta;
+model.Lags = lags(:).';
+model.Dimension = d;
+
+end
+
+
+function bic = multivariate_bic(E, number_of_parameters)
+
+n = size(E,1);
+d = size(E,2);
+
+if n <= 0
+    bic = Inf;
+    return;
+end
+
+Sigma = (E.'*E)/n;
+Sigma = Sigma + 1e-12*max(1,trace(Sigma)/max(d,1))*eye(d);
+
+eigenvalues = eig((Sigma+Sigma.')/2);
+eigenvalues = max(real(eigenvalues), realmin);
+
+logdet = sum(log(eigenvalues));
+
+bic = n*logdet + number_of_parameters*log(n);
+
+end
+
+
+%% ========================================================================
+% Threshold calibration
+% ========================================================================
+
+function calibration = calibrate_thresholds( ...
+    structure, train_normal, train_labelled, test_data, cfg)
+

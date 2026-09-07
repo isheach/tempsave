@@ -1,0 +1,198 @@
+        child_result.EvaluatedModelCount;
+    result.FailedIdentificationCount = ...
+        result.FailedIdentificationCount + ...
+        child_result.FailedIdentificationCount;
+
+    if child_result.Found
+        child_result.VisitedNodeCount = result.VisitedNodeCount;
+        child_result.EvaluatedModelCount = result.EvaluatedModelCount;
+        child_result.FailedIdentificationCount = ...
+            result.FailedIdentificationCount;
+        result = child_result;
+        return;
+    end
+end
+
+end
+
+
+function result = default_down_search_result()
+
+result = struct( ...
+    'Found', false, ...
+    'System', [], ...
+    'RSS', Inf, ...
+    'Depth', 0, ...
+    'VisitedNodeCount', 0, ...
+    'EvaluatedModelCount', 0, ...
+    'FailedIdentificationCount', 0);
+
+end
+
+
+function [identified_system, rss] = identify_standard_ct_model( ...
+    y, u, Ts, number_of_poles, number_of_zeros, ...
+    known_delay, tfest_max_iterations)
+
+y = y(:);
+u = u(:);
+
+if numel(y) ~= numel(u)
+    error('all_in_one:IdentificationSizeMismatch', ...
+        'Input and output lengths are different.');
+end
+
+if any(~isfinite(y)) || any(~isfinite(u))
+    error('all_in_one:NonfiniteIdentificationData', ...
+        'Identification data contains NaN/Inf.');
+end
+
+estimation_data = iddata(y, u, Ts);
+estimation_data.TimeUnit = 'seconds';
+estimation_data.InterSample = 'zoh';
+
+options = tfestOptions;
+options.Display = 'off';
+options.InitializeMethod = 'all';
+options.InitialCondition = 'auto';
+options.InputInterSample = 'zoh';
+options.EnforceStability = true;
+options.EstimateCovariance = false;
+options.SearchOptions.MaxIterations = tfest_max_iterations;
+
+initial_model = make_idtf_template( ...
+    number_of_poles, number_of_zeros, known_delay);
+
+[identified_system, ~] = tfest( ...
+    estimation_data, initial_model, options);
+
+if ~isstable(identified_system)
+    error('all_in_one:UnstableIdentifiedModel', ...
+        'The identified continuous-time model is unstable.');
+end
+
+% V3-B: a downsampled child record generally begins after t=0.
+% Restore the V1 behavior and let MATLAB estimate the initial condition
+% for that child record rather than forcing it to zero.
+y_prediction = one_step_predict( ...
+    identified_system, estimation_data, 'estimated');
+
+valid_mask = isfinite(y) & isfinite(y_prediction);
+minimum_valid_count = max(5, number_of_poles + number_of_zeros + 2);
+
+if sum(valid_mask) < minimum_valid_count
+    error('all_in_one:TooFewValidPredictions', ...
+        'Too few valid one-step predictions.');
+end
+
+prediction_error = y(valid_mask) - y_prediction(valid_mask);
+rss = sum(prediction_error.^2);
+
+if ~isfinite(rss)
+    error('all_in_one:InvalidRSS', ...
+        'The identification RSS is not finite.');
+end
+
+end
+
+
+%% ========================================================================
+%  Patch Monte Carlo experiments
+% ========================================================================
+
+function [result_table, condition_summary] = ...
+    run_patch_experiments(data, cfg, parallel_mode_used)
+
+R = data.number_of_experiments;
+count_values = data.outlier_count_values;
+mult_values = data.outlier_amplitude_multipliers;
+
+number_of_count_conditions = numel(count_values);
+number_of_multiplier_conditions = numel(mult_values);
+
+[experiment_grid, count_grid, multiplier_grid] = ndgrid( ...
+    1:R, ...
+    1:number_of_count_conditions, ...
+    1:number_of_multiplier_conditions);
+
+task_experiment_ids = experiment_grid(:);
+task_count_ids = count_grid(:);
+task_multiplier_ids = multiplier_grid(:);
+total_task_count = numel(task_experiment_ids);
+
+task_outputs = cell(total_task_count, 1);
+
+if parallel_mode_used
+    parfor task_id = 1:total_task_count
+        task_outputs{task_id} = run_one_patch_task( ...
+            task_id, task_experiment_ids, task_count_ids, ...
+            task_multiplier_ids, data, cfg);
+    end
+else
+    for task_id = 1:total_task_count
+        if task_id == 1 || mod(task_id, 25) == 0 || ...
+                task_id == total_task_count
+            fprintf('  Patch task %d / %d\n', ...
+                task_id, total_task_count);
+        end
+
+        task_outputs{task_id} = run_one_patch_task( ...
+            task_id, task_experiment_ids, task_count_ids, ...
+            task_multiplier_ids, data, cfg);
+    end
+end
+
+identification_succeeded = false(total_task_count, 1);
+detection_evaluated = false(total_task_count, 1);
+iteration_converged = false(total_task_count, 1);
+preclean_fallback_used = false(total_task_count, 1);
+outer_iterations = zeros(total_task_count, 1);
+identification_fit_percent = nan(total_task_count, 1);
+detected_count = zeros(total_task_count, 1);
+tp = zeros(total_task_count, 1);
+fp = zeros(total_task_count, 1);
+fn = zeros(total_task_count, 1);
+tn = zeros(total_task_count, 1);
+precision_value = zeros(total_task_count, 1);
+recall_value = zeros(total_task_count, 1);
+f1_value = zeros(total_task_count, 1);
+exact_match = false(total_task_count, 1);
+rmse_before = nan(total_task_count, 1);
+rmse_after = nan(total_task_count, 1);
+rmse_reduction_percent = nan(total_task_count, 1);
+parameter_error = nan(total_task_count, 1);
+adaptive_threshold = nan(total_task_count, 1);
+global_noise_scale = nan(total_task_count, 1);
+maximum_patch_score = nan(total_task_count, 1);
+detected_indices_text = cell(total_task_count, 1);
+last_error_text = cell(total_task_count, 1);
+
+for task_id = 1:total_task_count
+    current = task_outputs{task_id};
+
+    identification_succeeded(task_id) = ...
+        current.IdentificationSucceeded;
+    detection_evaluated(task_id) = current.DetectionEvaluated;
+    iteration_converged(task_id) = current.IterationConverged;
+    preclean_fallback_used(task_id) = current.PrecleanFallbackUsed;
+    outer_iterations(task_id) = current.OuterIterationCount;
+    identification_fit_percent(task_id) = ...
+        current.IdentificationFitPercent;
+    detected_count(task_id) = current.DetectedCount;
+    tp(task_id) = current.TP;
+    fp(task_id) = current.FP;
+    fn(task_id) = current.FN;
+    tn(task_id) = current.TN;
+    precision_value(task_id) = current.Precision;
+    recall_value(task_id) = current.Recall;
+    f1_value(task_id) = current.F1;
+    exact_match(task_id) = current.ExactMatch;
+    rmse_before(task_id) = current.RMSEBefore;
+    rmse_after(task_id) = current.RMSEAfter;
+
+    if isfinite(rmse_before(task_id)) && rmse_before(task_id) > 0
+        rmse_reduction_percent(task_id) = 100 * ...
+            (rmse_before(task_id) - rmse_after(task_id)) / ...
+            rmse_before(task_id);
+    end
+

@@ -1,0 +1,54 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{graphicx}
+\usepackage{url}
+\newcommand{\med}{\operatorname{median}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\Oh}{\widehat{\mathcal O}}
+
+\title{Outlier Detection in Continuous-Time Dynamic Systems via Downsampling Search and Multi-Scale Patch Analysis}
+\author{Author Name}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper studies model-based outlier detection in continuous-time dynamic systems when the measured output contains gross deviations. Reliable residual-based detection requires an accurate dynamic model, while the model itself must be estimated from measurements that may already contain outliers. Two methods are developed. The Downsampling method partitions the sampled data into lower-rate child sequences and searches a tree for a sequence that supports reliable continuous-time model estimation; the resulting model is then evaluated on the complete original-rate output, where median and median absolute deviation statistics are applied to the prediction residual. The Patch method operates directly at the original sampling rate, models local residual structure with overlapping multi-scale Patches, detects outliers using robust quadratic fitting, scale pooling, an adaptive threshold, and multi-scale support, and iteratively updates the model through repair and re-estimation. Continuous-time parameters are estimated from prediction-error criteria under a stable-model constraint. Controlled simulations show high detection accuracy for both methods over the tested outlier counts and amplitudes.
+\end{abstract}
+
+\begin{IEEEkeywords}
+outlier detection, continuous-time system identification, downsampling, prediction residual, multi-scale Patch, robust statistics.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Outlier detection in dynamic input--output data is closely coupled with system identification. A prediction residual can reliably reveal an abnormal measurement only when the identified model describes the nominal dynamics sufficiently well, yet the same model must be estimated from data that may already contain outliers. Contaminated measurements can therefore bias the model, while a biased model can produce large residuals even at nominal samples.
+
+Classical time-series work addressed this coupling through intervention and robust-estimation ideas. Iterative procedures for additive and innovational outliers estimate model parameters and outlier effects jointly \cite{chang1988,chen1993}. Robust ARMA estimators reduce the influence of abnormal observations through bounded residual constructions or robust losses \cite{bustos1986,muler2009,muma2017}. In system identification, explicit gross-error models and heavy-tailed observation models have also been used to protect parameter estimation from contaminated outputs \cite{xu2014,bottegal2014,bottegal2016}. These studies show that robust model estimation and pointwise outlier localization are related but distinct tasks.
+
+Once a reliable dynamic model is available, the discrepancy between the measured output and the model prediction provides a natural outlier indicator. Robust filtering uses the same principle through innovations \cite{masreliez1977}, while robust location and scale estimators such as the median and the median absolute deviation (MAD) prevent a few large residuals from dominating a global threshold \cite{rousseeuw1993}. Two practical difficulties remain: the original-rate output may be too contaminated to support direct identification, and normal residuals may contain local structure that is poorly represented by a single global scale.
+
+The proposed methods address these difficulties in different ways. Downsampling partitions the samples into lower-rate child sequences and searches the resulting tree for a sequence that supports accurate continuous-time model identification. The selected model is then evaluated on the complete original-rate output, where a robust global residual detector localizes outliers. Patch constructs overlapping windows on the original-rate residual, estimates local nominal residual trends by robust quadratic fitting, fuses information across overlapping Patches and multiple temporal scales, and determines outliers using an adaptive threshold and multi-scale support. Detected samples are repaired and used for the next model-estimation iteration.
+
+The main contributions are summarized as follows:
+\begin{enumerate}
+\item a downsampling tree search that separates reliable continuous-time model recovery from final pointwise outlier localization at the original sampling rate;
+\item an iterative multi-scale Patch method that combines local robust residual modeling, scale pooling, adaptive scoring, multi-scale support, and model-based output repair.
+\end{enumerate}
+
+The remainder of this paper is organized as follows. Section II formulates the problem. Section III presents the Downsampling method. Section IV develops the multi-scale Patch method. Section V reports the simulation experiments, and Section VI concludes the paper.
+
+\section{Problem Formulation}
+Consider a continuous-time single-input single-output linear time-invariant system
+\begin{equation}
+G(s;\theta)=\frac{B(s;\theta)}{A(s;\theta)},
+\end{equation}
+where $A$ and $B$ are the denominator and numerator polynomials and $\theta$ contains their unknown coefficients. The input $u(t)$ and nominal output $y(t)$ are sampled at interval $T_s$, producing $u_k$ and $y_k$, $k=1,\ldots,N$. The original measured output is written as
+\begin{equation}
+\bar y_k=y_k+\varepsilon_k,
+\end{equation}
+where $\varepsilon_k=0$ for a nominal sample and $\varepsilon_k\neq0$ for an outlier. The objective is to recover a model that represents the nominal dynamics and to determine the indices at which $\varepsilon_k\neq0$ without using those locations during identification.
+
+\section{Downsampling-Based Outlier Detection}

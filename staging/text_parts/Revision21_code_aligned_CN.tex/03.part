@@ -1,0 +1,26 @@
+15&1.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&2.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&4.00&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+下采样方法在所有条件下 Mean TP 都等于真实异常数且 Mean FN 为零，因此 Recall 始终为 1。其主要性能损失来自少量实验中的误报：5、10 和 15 个异常值时 Mean FP 分别为 $0.41$、$1.55$ 和 $1.05$，对应 F1 为 $0.9606$、$0.9281$ 和 $0.9662$。Patch 方法的误报更少：5 个异常值时 Mean FP 为 $0.04$，10 个异常值时为 $0.02$--$0.04$，15 个异常值时为 $0.22$；15 个异常值时 Mean FN 仅为 $0.01$。因此 Patch 的 Precision 始终高于 $0.985$，Recall 接近 1，F1 位于 $0.9924$--$0.9990$。在当前受控条件下，两种方法的结果在五个幅值倍率之间基本保持不变。
+
+\section{结论}
+本文提出了两种连续时间动态系统的模型驱动异常值检测方法。下采样方法在低采样率子序列中搜索能够支持可靠连续时间模型辨识的节点，并将获得的模型用于原采样率完整输出的稳健残差检测。Patch 方法直接对原采样率残差进行多尺度局部建模，通过尺度池化、自适应阈值和多尺度支持确定异常样本，并通过修复与重新估计迭代更新模型。受控仿真实验表明，下采样方法具有很高的检出率，而 Patch 方法在所测试条件下产生更少的误报。后续将进一步在测量噪声、更广泛的动态系统以及真实测量数据上评估两种方法。
+
+\begin{thebibliography}{10}
+\bibitem{chang1988} I. Chang, G. C. Tiao, and C. Chen, ``Estimation of time series parameters in the presence of outliers,'' \emph{Technometrics}, vol. 30, no. 2, pp. 193--204, 1988.
+\bibitem{chen1993} C. Chen and L.-M. Liu, ``Joint estimation of model parameters and outlier effects in time series,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 421, pp. 284--297, 1993.
+\bibitem{bustos1986} O. H. Bustos and V. J. Yohai, ``Robust estimates for ARMA models,'' \emph{J. Amer. Stat. Assoc.}, vol. 81, no. 393, pp. 155--168, 1986.
+\bibitem{muler2009} N. Muler, D. Pe\~na, and V. J. Yohai, ``Robust estimation for ARMA models,'' \emph{Ann. Stat.}, vol. 37, no. 2, pp. 816--840, 2009.
+\bibitem{muma2017} M. Muma and A. M. Zoubir, ``Bounded influence propagation $\tau$-estimation: A new robust method for ARMA model estimation,'' \emph{IEEE Trans. Signal Process.}, vol. 65, no. 7, pp. 1712--1727, 2017.
+\bibitem{xu2014} W. Xu, E.-W. Bai, and M. Cho, ``System identification in the presence of outliers and random noises: A compressed sensing approach,'' \emph{Automatica}, vol. 50, no. 11, pp. 2905--2911, 2014.
+\bibitem{bottegal2014} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Outlier robust system identification: A Bayesian kernel-based approach,'' in \emph{Proc. 19th IFAC World Congress}, vol. 47, no. 3, 2014, pp. 1073--1078.
+\bibitem{bottegal2016} G. Bottegal, A. Y. Aravkin, H. Hjalmarsson, and G. Pillonetto, ``Robust EM kernel-based methods for linear system identification,'' \emph{Automatica}, vol. 67, pp. 114--126, 2016.
+\bibitem{masreliez1977} C. J. Masreliez and R. D. Martin, ``Robust Bayesian estimation for the linear model and robustifying the Kalman filter,'' \emph{IEEE Trans. Autom. Control}, vol. 22, no. 3, pp. 361--371, 1977.
+\bibitem{rousseeuw1993} P. J. Rousseeuw and C. Croux, ``Alternatives to the median absolute deviation,'' \emph{J. Amer. Stat. Assoc.}, vol. 88, no. 424, pp. 1273--1283, 1993.
+\end{thebibliography}
+\end{document}

@@ -1,0 +1,46 @@
+name: Assemble exact current text sources
+
+on:
+  push:
+    paths:
+      - 'staging/text_parts/**'
+      - '.github/workflows/assemble-current-text-sources.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Assemble and verify exact sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p paper/current code/current
+          cat staging/text_parts/Revision21_code_aligned_EN.tex/*.part > paper/current/Revision21_code_aligned_EN.tex
+          cat staging/text_parts/Revision21_code_aligned_CN.tex/*.part > paper/current/Revision21_code_aligned_CN.tex
+          cat staging/text_parts/all_in_one_outlier_experiment_500_verified_baseline.m/*.part > code/current/all_in_one_outlier_experiment_500_verified_baseline.m
+          cat staging/text_parts/run_real_dataset_two_methods_fixed.m/*.part > code/current/run_real_dataset_two_methods_fixed.m
+
+          echo '51408a125f62f1d925f09e9a0c342c7126f1f72626230e13e2d515459033312e  paper/current/Revision21_code_aligned_EN.tex' | sha256sum -c -
+          echo '680d2de93bf27f8ebef798139f7e5e1c0039bbcb66cd79954b6b2c3e50790e6a  paper/current/Revision21_code_aligned_CN.tex' | sha256sum -c -
+          echo 'b29434e9cbe537800395c5e03fab85a03811ca6af05ea9031c47f707b14deb06  code/current/all_in_one_outlier_experiment_500_verified_baseline.m' | sha256sum -c -
+          echo '1a0dbccfb3317f1a961e039df63ce8c938ace59406e5bcc0aaa36ed9b80afa51  code/current/run_real_dataset_two_methods_fixed.m' | sha256sum -c -
+
+      - name: Commit final sources and remove temporary files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add paper/current code/current
+          git rm -r staging
+          git rm -f .github/workflows/materialize-current-sources.yml
+          git rm -f .github/workflows/assemble-current-text-sources.yml
+          git commit -m 'handoff: add verified current Revision 21 and MATLAB sources'
+          git push

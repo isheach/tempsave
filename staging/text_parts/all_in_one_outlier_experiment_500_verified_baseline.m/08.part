@@ -1,0 +1,247 @@
+        trend_votes(indices, patch_id) = fitted_trend;
+        score_votes(indices, patch_id) = local_score;
+    end
+
+    scale_trend(:, scale_id) = median( ...
+        trend_votes, 2, 'omitnan');
+    scale_score(:, scale_id) = median( ...
+        score_votes, 2, 'omitnan');
+end
+
+expected_signal = median(scale_trend, 2, 'omitnan');
+final_score = median(scale_score, 2, 'omitnan');
+
+finite_mask = isfinite(final_score);
+finite_scores = final_score(finite_mask);
+
+if isempty(finite_scores)
+    error('all_in_one:NoFinitePatchScores', ...
+        'Patch detector produced no finite score.');
+end
+
+Nv = numel(finite_scores);
+
+gaussian_familywise_threshold = sqrt(2) * erfcinv( ...
+    cfg.PatchTargetSequenceFalseAlarmRate / Nv);
+
+score_core_location = median(finite_scores);
+score_core_spread = corrected_mad(finite_scores);
+
+if ~isfinite(score_core_spread)
+    score_core_spread = 0;
+end
+
+adaptive_threshold = max( ...
+    gaussian_familywise_threshold, ...
+    score_core_location + ...
+    gaussian_familywise_threshold * score_core_spread);
+
+multiscale_support_count = sum( ...
+    scale_score > adaptive_threshold, 2);
+
+detected_mask = finite_mask & ...
+    final_score > adaptive_threshold & ...
+    multiscale_support_count >= ...
+    cfg.PatchMinimumMultiscaleSupport;
+
+detected_indices = find(detected_mask);
+
+end
+
+
+function [fitted_trend, local_error, local_scale] = ...
+    robust_polynomial_patch_fit( ...
+    patch_signal, polynomial_order, ...
+    maximum_irls_iterations, tuning_constant, scale_floor)
+
+patch_signal = patch_signal(:);
+L = numel(patch_signal);
+
+x = linspace(-1, 1, L).';
+
+X = zeros(L, polynomial_order + 1);
+for power_id = 0:polynomial_order
+    X(:, power_id + 1) = x.^power_id;
+end
+
+coefficients = X \ patch_signal;
+
+for iteration_id = 1:maximum_irls_iterations
+    fitted = X * coefficients;
+    residual = patch_signal - fitted;
+
+    current_scale = corrected_mad(residual);
+
+    if ~isfinite(current_scale) || current_scale < scale_floor
+        current_scale = max(std(residual, 0), scale_floor);
+    end
+
+    u = residual / (tuning_constant * current_scale);
+
+    weights = zeros(L, 1);
+    inside = abs(u) < 1;
+    weights(inside) = (1 - u(inside).^2).^2;
+
+    if sum(weights > 0) < polynomial_order + 1
+        break;
+    end
+
+    sqrt_weights = sqrt(weights);
+
+    weighted_X = bsxfun(@times, X, sqrt_weights);
+    weighted_y = patch_signal .* sqrt_weights;
+
+    new_coefficients = weighted_X \ weighted_y;
+
+    relative_change = norm(new_coefficients - coefficients, 2) / ...
+        max(norm(coefficients, 2), eps);
+
+    coefficients = new_coefficients;
+
+    if relative_change <= 1e-8
+        break;
+    end
+end
+
+fitted_trend = X * coefficients;
+local_error = patch_signal - fitted_trend;
+
+local_scale = corrected_mad(local_error);
+
+if ~isfinite(local_scale) || local_scale < scale_floor
+    local_scale = max(std(local_error, 0), scale_floor);
+end
+
+end
+
+
+function starts = make_patch_starts(N, L, stride)
+
+last_start = N - L + 1;
+
+starts = 1:stride:last_start;
+
+if isempty(starts)
+    starts = 1;
+end
+
+if starts(end) ~= last_start
+    starts(end+1) = last_start;
+end
+
+starts = unique(starts, 'stable');
+
+end
+
+
+%% ========================================================================
+%  Common identification helpers
+% ========================================================================
+
+function initial_model = make_idtf_template( ...
+    number_of_poles, number_of_zeros, known_delay)
+
+numerator_template = nan(1, number_of_zeros + 1);
+denominator_template = [1, nan(1, number_of_poles)];
+
+initial_model = idtf( ...
+    numerator_template, denominator_template, ...
+    'IODelay', known_delay);
+
+initial_model.TimeUnit = 'seconds';
+
+try
+    initial_model.Structure(1).IODelay.Free = false;
+catch
+    try
+        initial_model.Structure.IODelay.Free = false;
+    catch
+        % Older MATLAB releases may expose the structure differently.
+        % The numeric delay is still supplied in the initial idtf model.
+    end
+end
+
+end
+
+
+function y_prediction = one_step_predict( ...
+    identified_system, data, initial_condition_mode)
+
+% V3-B stage-dependent initial-condition handling:
+%
+%   'estimated':
+%       Use MATLAB's default predict() behavior.  This is used for
+%       Downsampling child records because a child usually starts at a
+%       nonzero physical system state.
+%
+%   'zero':
+%       Explicitly impose zero initial state.  This is used when the model
+%       is evaluated on the original complete record, which is generated
+%       from zero initial state in the current simulation.
+
+if nargin < 3 || isempty(initial_condition_mode)
+    initial_condition_mode = 'estimated';
+end
+
+switch lower(initial_condition_mode)
+
+    case {'estimated', 'estimate', 'default'}
+        % Deliberately omit predictOptions here so that this reproduces
+        % the original V1 child-record behavior exactly.
+        prediction_data = predict( ...
+            identified_system, data, 1);
+
+    case {'zero', 'z'}
+        prediction_options = predictOptions( ...
+            'InitialCondition', 'z');
+
+        prediction_data = predict( ...
+            identified_system, data, 1, prediction_options);
+
+    otherwise
+        error('all_in_one:InvalidInitialConditionMode', ...
+            'Unknown initial-condition mode: %s', ...
+            initial_condition_mode);
+end
+
+y_prediction = prediction_data.OutputData;
+
+if iscell(y_prediction)
+    y_prediction = y_prediction{1};
+end
+
+y_prediction = real(y_prediction(:));
+
+if numel(y_prediction) ~= size(data.OutputData, 1)
+    error('all_in_one:PredictionSizeMismatch', ...
+        'One-step prediction length does not match the data length.');
+end
+
+if any(~isfinite(y_prediction))
+    error('all_in_one:NonfinitePrediction', ...
+        'One-step prediction contains NaN/Inf.');
+end
+
+end
+
+
+function error_value = continuous_parameter_relative_error( ...
+    identified_system, true_numerator, true_denominator)
+
+[estimated_numerator, estimated_denominator] = ...
+    tfdata(identified_system, 'v');
+
+estimated_numerator = real(estimated_numerator(:).');
+estimated_denominator = real(estimated_denominator(:).');
+
+if isempty(estimated_denominator) || ...
+        abs(estimated_denominator(1)) <= eps
+    error('all_in_one:InvalidEstimatedDenominator', ...
+        'Estimated denominator is invalid.');
+end
+
+estimated_numerator = ...
+    estimated_numerator / estimated_denominator(1);
+estimated_denominator = ...
+    estimated_denominator / estimated_denominator(1);
+

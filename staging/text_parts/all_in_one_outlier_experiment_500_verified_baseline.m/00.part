@@ -1,0 +1,164 @@
+function all_in_one_outlier_experiment_500_verified_baseline
+% ALL_IN_ONE_OUTLIER_EXPERIMENT_500
+%
+% 一键完成两种论文方法的完整 Monte Carlo 实验：
+%
+%   1) 生成 500 点连续时间系统采样序列；
+%   2) 每个条件重复 100 次；
+%   3) 异常点数量 = [5, 10, 15]；
+%   4) 异常幅值倍率 = [0.25, 0.5, 1, 2, 4]；
+%   5) 方法 A：Downsampling + residual-guided tree search
+%              + full-record one-step prediction
+%              + median / consistency-corrected MAD detection；
+%   6) 方法 B：robust continuous-time identification
+%              + adaptive multi-scale Patch
+%              + multi-scale support
+%              + iterative repair / re-identification；
+%   7) 两种方法都使用 one-step-ahead prediction，而不是 sim()；
+%   8) 输出逐实验结果、15 个条件的汇总结果以及两种方法的对比表；
+%   9) 保存 MAT 和 XLSX。
+%
+% 运行方式：
+%
+%   >> all_in_one_outlier_experiment_500_verified_baseline
+%
+% 需要：
+%   - System Identification Toolbox
+%   - Control System Toolbox
+% 可选：
+%   - Parallel Computing Toolbox
+%
+% VERIFIED BASELINE：
+%   本文件直接以 V3-B 为算法基线，不采用 V3-C 的二次残差拟合。
+%   Downsampling 保持：child estimated IC + full-record zero IC + 3×MAD；
+%   不使用 V2 propagation correction，不使用 quadratic detrending，
+%   不使用 numerical detector floor。
+%   Patch 完全保持 V3-B 版本，不改变 identification、multi-scale Patch、
+%   adaptive threshold、multi-scale support、repair 和 re-identification。
+%   新增内容仅为数据生成后的自动验证与验证结果导出，不改变任何实验数据
+%   或算法计算结果。
+%
+% 说明：
+%   本文件故意保持当前论文实验设定，不执行此前暂缓的“高分辨率连续
+%   时间仿真 -> 再采样”重构。当前干净序列直接由连续时间系统在指定
+%   采样时刻上生成，与现阶段代码主线保持一致。
+%
+% -------------------------------------------------------------------------
+
+clc;
+close all;
+warning('off', 'all');
+
+cfg = default_config();
+check_required_functions();
+
+script_full_path = mfilename('fullpath');
+if isempty(script_full_path)
+    script_directory = pwd;
+else
+    script_directory = fileparts(script_full_path);
+end
+
+output_directory = fullfile(script_directory, ...
+    'all_in_one_outlier_experiment_500_verified_baseline_results');
+if exist(output_directory, 'dir') ~= 7
+    mkdir(output_directory);
+end
+
+fprintf('\n============================================================\n');
+fprintf('  All-in-one 500-point outlier experiment - verified baseline\n');
+fprintf('============================================================\n');
+fprintf('Samples                  : %d\n', cfg.NumberOfSamples);
+fprintf('Runs per condition       : %d\n', cfg.NumberOfExperiments);
+fprintf('Outlier counts           : %s\n', mat2str(cfg.OutlierCounts));
+fprintf('Amplitude multipliers    : %s\n', mat2str(cfg.AmplitudeMultipliers));
+fprintf('Conditions per method    : %d\n', ...
+    numel(cfg.OutlierCounts) * numel(cfg.AmplitudeMultipliers));
+fprintf('Total runs per method    : %d\n', ...
+    cfg.NumberOfExperiments * numel(cfg.OutlierCounts) * ...
+    numel(cfg.AmplitudeMultipliers));
+fprintf('Output directory         : %s\n', output_directory);
+fprintf('============================================================\n\n');
+
+%% 1. Generate the shared 500-point Monte Carlo dataset
+fprintf('[1/5] Generating the shared dataset ...\n');
+data = generate_dataset(cfg);
+
+fprintf('Validating generated dataset before any experiment ...\n');
+dataset_validation = validate_generated_dataset(data, cfg);
+disp(dataset_validation);
+
+if ~all(dataset_validation.Passed)
+    failed_rows = find(~dataset_validation.Passed);
+    error('all_in_one:DatasetValidationFailed', ...
+        'Dataset validation failed at row(s): %s', ...
+        mat2str(failed_rows(:).'));
+end
+
+fprintf('Dataset validation: ALL CHECKS PASSED.\n');
+
+dataset_file = fullfile(output_directory, ...
+    'all_in_one_500_verified_baseline_dataset.mat');
+save(dataset_file, 'data', 'cfg', 'dataset_validation', '-v7.3');
+fprintf('Dataset saved: %s\n\n', dataset_file);
+
+%% 2. Parallel mode
+[parallel_mode_used, parallel_worker_count] = ...
+    prepare_parallel_pool(cfg.UseParallel, cfg.ParallelWorkerCount);
+
+if parallel_mode_used
+    fprintf('Parallel mode enabled with %d workers.\n\n', ...
+        parallel_worker_count);
+else
+    fprintf('Parallel mode not available or disabled; using serial loops.\n\n');
+end
+
+%% 3. Downsampling method
+fprintf('[2/5] Running Downsampling + median/MAD experiments ...\n');
+down_start = tic;
+[down_runs, down_summary] = run_downsampling_experiments( ...
+    data, cfg, parallel_mode_used);
+down_elapsed_seconds = toc(down_start);
+fprintf('Downsampling completed in %.2f s.\n\n', down_elapsed_seconds);
+
+%% 4. Patch method
+fprintf('[3/5] Running adaptive multi-scale Patch experiments ...\n');
+patch_start = tic;
+[patch_runs, patch_summary] = run_patch_experiments( ...
+    data, cfg, parallel_mode_used);
+patch_elapsed_seconds = toc(patch_start);
+fprintf('Patch completed in %.2f s.\n\n', patch_elapsed_seconds);
+
+%% 5. Comparison
+fprintf('[4/5] Building the comparison table ...\n');
+comparison = build_comparison_table(down_summary, patch_summary);
+
+settings_table = config_to_table(cfg, parallel_mode_used, ...
+    parallel_worker_count, down_elapsed_seconds, patch_elapsed_seconds);
+
+%% 6. Save all results
+fprintf('[5/5] Saving MAT and XLSX results ...\n');
+
+result_mat_file = fullfile(output_directory, ...
+    'all_in_one_outlier_experiment_500_verified_baseline_results.mat');
+
+save(result_mat_file, ...
+    'cfg', 'data', 'dataset_validation', ...
+    'down_runs', 'down_summary', ...
+    'patch_runs', 'patch_summary', ...
+    'comparison', 'settings_table', ...
+    'parallel_mode_used', 'parallel_worker_count', ...
+    'down_elapsed_seconds', 'patch_elapsed_seconds', ...
+    '-v7.3');
+
+result_excel_file = fullfile(output_directory, ...
+    'all_in_one_outlier_experiment_500_verified_baseline_results.xlsx');
+
+if exist(result_excel_file, 'file') == 2
+    delete(result_excel_file);
+end
+
+writetable(down_runs, result_excel_file, 'Sheet', 'Down_AllRuns');
+writetable(down_summary, result_excel_file, 'Sheet', 'Down_Summary');
+writetable(patch_runs, result_excel_file, 'Sheet', 'Patch_AllRuns');
+writetable(patch_summary, result_excel_file, 'Sheet', 'Patch_Summary');

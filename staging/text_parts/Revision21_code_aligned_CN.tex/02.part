@@ -1,0 +1,161 @@
+\max_k r_{p,k}^{(i)}-\min_k r_{p,k}^{(i)}\right\},\\
+s_0^{(i)}&=\max\{s_a,s_r h^{(i)}\},
+\end{align}
+令一阶差分的稳健中心为
+\begin{equation}
+m_\Delta^{(i)}=\med\left(\{\Delta r_{p,k}^{(i)}\}\right),
+\end{equation}
+则全局变化尺度为
+\begin{equation}
+s_g^{(i)}=\max\left\{
+\frac{1.4826}{\sqrt 2}\med\left(\{|\Delta r_{p,k}^{(i)}-m_\Delta^{(i)}|\}\right),
+s_0^{(i)}\right\}.
+\end{equation}
+对尺度 $\ell$ 定义
+\begin{equation}
+\omega_\ell=\frac{\eta}{L_\ell+\eta},
+\end{equation}
+正则化尺度为
+\begin{equation}
+s_{\ell,p}^{r,(i)}=
+\sqrt{(1-\omega_\ell)(s_{\ell,p}^{(i)})^2+
+\omega_\ell(s_g^{(i)})^2},
+\end{equation}
+最终用于标准化的尺度为
+\begin{equation}
+s_{\ell,p}^{*,(i)}=
+\max\{s_{\ell,p}^{(i)},s_{\ell,p}^{r,(i)},s_0^{(i)}\},
+\end{equation}
+对应 Patch 分数为
+\begin{equation}
+z_{\ell,p,k}^{(i)}=\frac{|e_{\ell,p,k}^{(i)}|}{s_{\ell,p}^{*,(i)}}.
+\end{equation}
+
+同一尺度下，对所有覆盖样本 $k$ 的重叠 Patch 取中位数进行融合，
+\begin{align}
+\tilde r_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}\tilde r_{\ell,p,k}^{(i)},\\
+z_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}z_{\ell,p,k}^{(i)}.
+\end{align}
+不同尺度之间进一步得到
+\begin{align}
+\tilde r_{p,k}^{(i)}&=\med_{\ell}\tilde r_{\ell,k}^{(i)},\\
+z_{p,k}^{(i)}&=\med_{\ell}z_{\ell,k}^{(i)}.
+\end{align}
+
+\subsection{自适应阈值、多尺度支持与修复}
+设有限融合分数数量为 $N_v$，目标序列级误报概率为 $\alpha$，定义
+\begin{equation}
+\tau_g=\sqrt 2\,\operatorname{erfc}^{-1}\!\left(\frac{\alpha}{N_v}\right).
+\end{equation}
+令 $\mathcal Z_i$ 为有限的 $z_{p,k}^{(i)}$ 所构成的集合，其中心与尺度为
+\begin{align}
+m_z^{(i)}&=\med(\mathcal Z_i),\\
+s_z^{(i)}&=1.4826\,\med\left(\{|z_{p,k}^{(i)}-m_z^{(i)}|\}\right).
+\end{align}
+自适应阈值为
+\begin{equation}
+\tau^{(i)}=\max\{\tau_g,m_z^{(i)}+\tau_gs_z^{(i)}\}.
+\end{equation}
+各尺度对样本 $k$ 的支持数为
+\begin{equation}
+c_k^{(i)}=\sum_{\ell}\ind\!\left(z_{\ell,k}^{(i)}>\tau^{(i)}\right),
+\end{equation}
+其中 $\ind(\cdot)$ 在条件成立时取 $1$，否则取 $0$。检测集合为
+\begin{equation}
+\Oh_p^{(i)}=\left\{k:z_{p,k}^{(i)}>\tau^{(i)},\;c_k^{(i)}\ge R\right\}.
+\end{equation}
+
+检测出的样本由模型预测与局部正常残差趋势共同修复：
+\begin{equation}
+\bar y_k^{(i)}=\begin{cases}
+\hat y_{p,k}^{(i)}+\tilde r_{p,k}^{(i)},&k\in\Oh_p^{(i)},\\
+\bar y_k,&k\notin\Oh_p^{(i)}.
+\end{cases}
+\end{equation}
+从第二轮开始，相邻两轮修复输出的相对变化定义为
+\begin{equation}
+d_i=\frac{\|\bar{\bm y}^{(i)}-\bar{\bm y}^{(i-1)}\|_2}
+{\max\{\|\bar{\bm y}^{(i-1)}\|_2,\epsilon\}},\qquad i\ge2.
+\end{equation}
+当检测集合与上一轮相同且 $d_i$ 低于给定容差时停止迭代，否则在达到最大迭代次数时终止。
+
+\section{仿真实验}
+该系统为
+\begin{equation}
+G_0(s)=\frac{1}{s^2+2s+1}.
+\end{equation}
+系统从零初始状态开始，输入为单位阶跃，以 $T_s=0.01$~s 对连续时间响应进行采样并形成 500 点序列。实验分别设置 5、10 和 15 个异常点。本实验使用的基础异常幅值取为
+\begin{equation}
+\begin{aligned}
+&[0.26,-0.38,-0.30,-0.24,-0.10,-0.22,0.36,-0.32,\\
+&\quad 0.32,0.38,0.18,0.20,-0.26,0.28,-0.34].
+\end{aligned}
+\end{equation}
+5、10 和 15 个异常值条件分别使用该序列中的前 5、前 10 和前 15 个值，再整体乘以 $0.25$、$0.5$、$1$、$2$ 或 $4$。同一异常数量和同一实验编号下，五个倍率共享相同的异常位置与基础幅值。每个“异常数量--幅值倍率”条件重复 100 次。
+
+设真实异常索引集合为 $\mathcal O$，检测集合为 $\Oh$，逐点统计量定义为
+\begin{align}
+\mathrm{TP}&=|\mathcal O\cap\Oh|,\\
+\mathrm{FP}&=|\Oh\setminus\mathcal O|,\\
+\mathrm{FN}&=|\mathcal O\setminus\Oh|,\\
+\mathrm{TN}&=N-\mathrm{TP}-\mathrm{FP}-\mathrm{FN}.
+\end{align}
+进一步定义
+\begin{align}
+\mathrm{Precision}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}},\\
+\mathrm{Recall}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FN}},\\
+F1&=\frac{2\,\mathrm{Precision}\,\mathrm{Recall}}{\mathrm{Precision}+\mathrm{Recall}}.
+\end{align}
+Precision 表示被判定为异常的样本中真实异常所占比例，Recall 表示真实异常中被成功检测的比例，F1 为二者的调和平均。
+
+\begin{table*}[t]
+\centering
+\caption{下采样方法在不同异常数量与幅值倍率下的检测结果（每行 100 次实验）。}
+\label{tab:down}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+异常数 & 倍率 & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&0.50&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&1.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&2.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+5&4.00&5.00&494.59&0.41&0.00&0.9242&1.0000&0.9606\\
+10&0.25&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&0.50&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&1.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&2.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+10&4.00&10.00&488.45&1.55&0.00&0.8658&1.0000&0.9281\\
+15&0.25&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&0.50&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&1.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&2.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+15&4.00&15.00&483.95&1.05&0.00&0.9346&1.0000&0.9662\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\caption{Patch 方法在不同异常数量与幅值倍率下的检测结果（每行 100 次实验）。}
+\label{tab:patch}
+\scriptsize
+\setlength{\tabcolsep}{4.0pt}
+\begin{tabular}{ccccccccc}
+\toprule
+异常数 & 倍率 & Mean TP & Mean TN & Mean FP & Mean FN & Precision & Recall & F1\\
+\midrule
+5&0.25&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&0.50&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&1.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&2.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+5&4.00&5.00&494.96&0.04&0.00&0.9921&1.0000&0.9960\\
+10&0.25&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&0.50&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&1.00&10.00&489.98&0.02&0.00&0.9980&1.0000&0.9990\\
+10&2.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+10&4.00&10.00&489.96&0.04&0.00&0.9960&1.0000&0.9980\\
+15&0.25&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\
+15&0.50&14.99&484.78&0.22&0.01&0.9855&0.9993&0.9924\\

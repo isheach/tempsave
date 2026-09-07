@@ -1,0 +1,203 @@
+            outlier_added_all(1:current_count, experiment_id, ...
+                count_id, multiplier_id) = active_added_values;
+        end
+    end
+end
+
+data = struct();
+data.y_all = y_all;
+data.y_clean_all = y_clean_all;
+data.u_all = u_all;
+data.outlier_indices_all = outlier_indices_all;
+data.outlier_added_all = outlier_added_all;
+data.outlier_count_values = count_values;
+data.outlier_amplitude_multipliers = mult_values;
+data.fixed_outlier_values_order = fixed_outlier_values_order;
+data.number_of_samples = N;
+data.number_of_experiments = R;
+data.t = t;
+data.Ts = Ts;
+data.true_numerator = cfg.TrueNumerator;
+data.true_denominator = cfg.TrueDenominator;
+
+fprintf('  Dataset size: %s\n', mat2str(size(y_all)));
+fprintf('  Fixed base outlier order used up to 15 points:\n    %s\n', ...
+    mat2str(fixed_outlier_values_order(:).', 4));
+
+end
+
+
+%% ========================================================================
+%  Dataset validation (read-only; does not modify generated data)
+% ========================================================================
+
+function validation = validate_generated_dataset(data, cfg)
+
+check_name = {};
+passed = false(0,1);
+details = {};
+
+N = cfg.NumberOfSamples;
+R = cfg.NumberOfExperiments;
+counts = cfg.OutlierCounts(:).';
+multipliers = cfg.AmplitudeMultipliers(:).';
+
+C = numel(counts);
+M = numel(multipliers);
+max_count = max(counts);
+
+    function record(name, ok, detail)
+        check_name{end+1,1} = name;
+        passed(end+1,1) = logical(ok);
+        details{end+1,1} = detail;
+    end
+
+% Dimensions.
+actual_size = size(data.y_all);
+actual_size(end+1:4) = 1;
+record('y_all dimensions', ...
+    isequal(actual_size(1:4), [N R C M]), ...
+    sprintf('expected=%s, actual=%s', ...
+    mat2str([N R C M]), mat2str(actual_size(1:4))));
+
+record('clean/input dimensions', ...
+    isequal(size(data.y_clean_all), [N R]) && ...
+    isequal(size(data.u_all), [N R]), ...
+    sprintf('clean=%s, input=%s', ...
+    mat2str(size(data.y_clean_all)), ...
+    mat2str(size(data.u_all))));
+
+record('outlier-index dimensions', ...
+    isequal(size(data.outlier_indices_all), [max_count R C]), ...
+    sprintf('expected=%s, actual=%s', ...
+    mat2str([max_count R C]), ...
+    mat2str(size(data.outlier_indices_all))));
+
+% Time and input.
+expected_t = (0:N-1).' * cfg.SampleTime;
+time_error = max(abs(data.t(:) - expected_t));
+record('time grid and sample interval', ...
+    numel(data.t) == N && ...
+    abs(data.Ts-cfg.SampleTime) <= eps(max(1,cfg.SampleTime)) && ...
+    time_error <= 1e-12, ...
+    sprintf('Ts=%.12g, max_time_error=%.3e', ...
+    data.Ts, time_error));
+
+input_error = max(abs(data.u_all(:)-1));
+record('unit-step input', input_error == 0, ...
+    sprintf('max_abs_error_from_one=%.3e', input_error));
+
+% Independent regeneration of clean CT response.
+true_system = tf(cfg.TrueNumerator, cfg.TrueDenominator);
+reference_y = lsim(true_system, ones(N,1), expected_t);
+reference_y = real(reference_y(:));
+
+clean_model_error = max(abs(data.y_clean_all(:,1)-reference_y));
+clean_replication_error = max(abs( ...
+    data.y_clean_all-repmat(reference_y,1,R)), [], 'all');
+
+record('clean response matches true continuous-time system', ...
+    clean_model_error <= 1e-12, ...
+    sprintf('max_abs_error=%.3e', clean_model_error));
+
+record('clean response identical across Monte Carlo runs', ...
+    clean_replication_error <= 1e-12, ...
+    sprintf('max_abs_error=%.3e', clean_replication_error));
+
+% Finite signal values.
+finite_ok = all(isfinite(data.y_all(:))) && ...
+    all(isfinite(data.y_clean_all(:))) && ...
+    all(isfinite(data.u_all(:)));
+record('all generated signal values finite', ...
+    finite_ok, sprintf('finite=%d', finite_ok));
+
+% Fixed amplitude order.
+fixed_values = data.fixed_outlier_values_order(:);
+base_values = cfg.BaseOutlierValues(:);
+fixed_ok = numel(fixed_values) == max_count && ...
+    numel(unique(fixed_values)) == max_count && ...
+    all(ismember(fixed_values, base_values));
+
+record('fixed base-amplitude order valid', fixed_ok, ...
+    sprintf('order=%s', mat2str(fixed_values.',6)));
+
+% Full condition-by-condition verification.
+indices_ok = true;
+locations_ok = true;
+amplitudes_ok = true;
+stored_values_ok = true;
+pairing_ok = true;
+
+max_outside_change = 0;
+max_amplitude_error = 0;
+max_pairing_error = 0;
+conditions_checked = 0;
+
+for c = 1:C
+
+    current_count = counts(c);
+    active_base = fixed_values(1:current_count);
+
+    for e = 1:R
+
+        idx = data.outlier_indices_all(1:current_count,e,c);
+        idx = idx(:);
+
+        if any(~isfinite(idx)) || any(idx<1) || any(idx>N) || ...
+                any(idx~=round(idx)) || ...
+                numel(unique(idx)) ~= current_count
+            indices_ok = false;
+        end
+
+        reference_normalized_added = [];
+
+        for m = 1:M
+
+            conditions_checked = conditions_checked + 1;
+
+            y = data.y_all(:,e,c,m);
+            clean_y = data.y_clean_all(:,e);
+            actual_added = y-clean_y;
+
+            expected_values = multipliers(m)*active_base;
+            expected_added = zeros(N,1);
+            expected_added(idx) = expected_values;
+
+            amp_error = max(abs(actual_added-expected_added));
+            max_amplitude_error = max(max_amplitude_error, amp_error);
+
+            if amp_error > 1e-12
+                amplitudes_ok = false;
+            end
+
+            outside = true(N,1);
+            outside(idx) = false;
+            outside_change = max(abs(actual_added(outside)));
+            max_outside_change = max(max_outside_change, outside_change);
+
+            observed_changed = abs(actual_added)>1e-12;
+            expected_changed = false(N,1);
+            expected_changed(idx) = true;
+
+            if ~isequal(observed_changed,expected_changed)
+                locations_ok = false;
+            end
+
+            stored = data.outlier_added_all(1:current_count,e,c,m);
+            if max(abs(stored(:)-expected_values(:))) > 1e-12
+                stored_values_ok = false;
+            end
+
+            normalized_added = actual_added(idx)/multipliers(m);
+
+            if isempty(reference_normalized_added)
+                reference_normalized_added = normalized_added;
+            else
+                pairing_error = max(abs( ...
+                    normalized_added-reference_normalized_added));
+                max_pairing_error = max(max_pairing_error,pairing_error);
+
+                if pairing_error > 1e-12
+                    pairing_ok = false;
+                end
+            end

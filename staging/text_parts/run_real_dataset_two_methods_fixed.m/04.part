@@ -1,0 +1,256 @@
+calibration = struct();
+calibration.DownTrainingF1 = NaN;
+calibration.PatchTrainingF1 = NaN;
+
+if ~isempty(train_normal)
+
+    normal_model = fit_model_on_full_record( ...
+        train_normal.Y, structure.Lags, cfg, ...
+        cfg.StructureTrimFraction);
+
+elseif ~isempty(train_labelled)
+
+    % Preserve sequence adjacency and rely on robust fitting; labels are
+    % used later only to choose gamma.
+    normal_model = fit_model_on_full_record( ...
+        train_labelled.Y, structure.Lags, cfg, ...
+        cfg.StructureTrimFraction);
+
+else
+    normal_model = [];
+end
+
+if ~isempty(train_labelled)
+
+    % Tune on labelled TRAINING data only.
+    down_score = global_residual_score( ...
+        train_labelled.Y, normal_model, ...
+        structure.Lags, cfg);
+
+    patch_score = patch_residual_score( ...
+        train_labelled.Y, normal_model, ...
+        structure.Lags, cfg);
+
+    [calibration.DownGamma, calibration.DownTrainingF1] = ...
+        tune_gamma_by_f1( ...
+        down_score, train_labelled.Label, ...
+        cfg.GammaCandidates);
+
+    [calibration.PatchGamma, calibration.PatchTrainingF1] = ...
+        tune_gamma_by_f1( ...
+        patch_score.Score, train_labelled.Label, ...
+        cfg.GammaCandidates);
+
+    calibration.DownMode = "labelled_training_F1";
+    calibration.PatchMode = "labelled_training_F1";
+
+elseif ~isempty(train_normal)
+
+    down_score = global_residual_score( ...
+        train_normal.Y, normal_model, ...
+        structure.Lags, cfg);
+
+    patch_score = patch_residual_score( ...
+        train_normal.Y, normal_model, ...
+        structure.Lags, cfg);
+
+    calibration.DownGamma = training_quantile_gamma( ...
+        down_score, cfg.NormalTrainingFalsePositiveRate, ...
+        cfg.GammaCandidates);
+
+    calibration.PatchGamma = training_quantile_gamma( ...
+        patch_score.Score, ...
+        cfg.NormalTrainingFalsePositiveRate, ...
+        cfg.GammaCandidates);
+
+    calibration.DownMode = "normal_training_FPR";
+    calibration.PatchMode = "normal_training_FPR";
+
+else
+    % No test labels are used for calibration.
+    calibration.DownGamma = cfg.UnsupervisedDownGamma;
+    calibration.PatchGamma = cfg.UnsupervisedPatchGamma;
+
+    calibration.DownMode = "fixed_unsupervised";
+    calibration.PatchMode = "fixed_unsupervised";
+end
+
+end
+
+
+function [gamma, best_f1] = tune_gamma_by_f1( ...
+    score, labels, candidates)
+
+score = score(:);
+labels = logical(labels(:));
+
+valid = isfinite(score);
+
+best_f1 = -Inf;
+gamma = candidates(1);
+
+for g = candidates(:).'
+
+    detected = false(size(labels));
+    detected(valid) = score(valid) > g;
+
+    metrics = binary_metrics(labels,detected);
+
+    % Tie break toward the larger threshold (fewer false positives).
+    if metrics.F1 > best_f1 + 1e-12 || ...
+            (abs(metrics.F1-best_f1)<=1e-12 && g>gamma)
+        best_f1 = metrics.F1;
+        gamma = g;
+    end
+end
+
+end
+
+
+function gamma = training_quantile_gamma(score, alpha, candidates)
+
+score = score(isfinite(score));
+
+if isempty(score)
+    gamma = 3;
+    return;
+end
+
+q = simple_quantile(score, 1-alpha);
+
+[~, id] = min(abs(candidates-q));
+gamma = candidates(id);
+
+end
+
+
+%% ========================================================================
+% Downsampling
+% ========================================================================
+
+function result = run_downsampling_method(Y, structure, gamma, cfg)
+
+lags = structure.Lags;
+maximum_lag = max(lags);
+targets = (maximum_lag+1:size(Y,1)).';
+
+search = downsampling_search( ...
+    Y, targets, lags, cfg, 0, []);
+
+if ~search.Found
+    model = fit_model_on_full_record( ...
+        Y, lags, cfg, cfg.DownFitTrimFraction);
+    accepted_targets = targets;
+    accepted_path = [];
+else
+    model = search.Model;
+    accepted_targets = search.Targets;
+    accepted_path = search.Path;
+end
+
+[prediction, residual, valid] = ...
+    predict_var_complete(Y, model, lags);
+
+[score, center, scale] = standardized_global_residual( ...
+    residual, valid, cfg.MinimumScale);
+
+detected = valid & score > gamma;
+
+result = struct();
+result.DetectedMask = detected;
+result.Score = score;
+result.Prediction = prediction;
+result.Residual = residual;
+result.Center = center;
+result.Scale = scale;
+result.AcceptedTargets = accepted_targets;
+result.AcceptedPath = accepted_path;
+result.Aux1 = numel(accepted_targets);
+result.Aux2 = search.NodesEvaluated;
+
+end
+
+
+function result = downsampling_search( ...
+    Y, parent_targets, lags, cfg, depth, path)
+
+result = struct( ...
+    'Found',false, ...
+    'Model',[], ...
+    'Targets',[], ...
+    'Path',[], ...
+    'Criterion',Inf, ...
+    'NodesEvaluated',0);
+
+K = cfg.DownSplitCount;
+M = numel(parent_targets);
+
+candidate = repmat(struct( ...
+    'Model',[], ...
+    'Targets',[], ...
+    'Criterion',Inf, ...
+    'ChildID',0), K, 1);
+
+for child_id = 1:K
+
+    targets = parent_targets(child_id:K:M);
+
+    if numel(targets) < cfg.DownMinimumTargetRows
+        continue;
+    end
+
+    [X,T,targets] = make_var_design(Y,lags,targets);
+
+    if size(X,1) < max(cfg.DownMinimumTargetRows,size(X,2)+2)
+        continue;
+    end
+
+    try
+        model = fit_var_robust( ...
+            X,T,lags,size(Y,2),cfg.RidgeRelative, ...
+            cfg.DownFitTrimFraction, ...
+            cfg.DownRobustFitIterations);
+
+        E = T-X*model.Beta;
+
+        criterion = robust_child_criterion(E);
+
+        candidate(child_id).Model = model;
+        candidate(child_id).Targets = targets;
+        candidate(child_id).Criterion = criterion;
+        candidate(child_id).ChildID = child_id;
+
+        result.NodesEvaluated = result.NodesEvaluated+1;
+    catch
+    end
+end
+
+criteria = [candidate.Criterion];
+finite_ids = find(isfinite(criteria));
+
+if isempty(finite_ids)
+    return;
+end
+
+[~, order_local] = sort(criteria(finite_ids),'ascend');
+visit_ids = finite_ids(order_local);
+
+best_id = visit_ids(1);
+
+% At the deepest allowed level, accept the cleanest child.
+if depth+1 >= cfg.DownMaximumDepth
+    result.Found = true;
+    result.Model = candidate(best_id).Model;
+    result.Targets = candidate(best_id).Targets;
+    result.Path = [path,best_id];
+    result.Criterion = candidate(best_id).Criterion;
+    return;
+end
+
+% Try the cleanest candidate first. If further splitting becomes too short,
+% accept the current candidate. This mirrors the "search clean child first"
+% logic while avoiding a noise-free RSS threshold that is inappropriate for
+% real benchmark data.
+for order_id = 1:numel(visit_ids)
+
+    child_id = visit_ids(order_id);

@@ -1,0 +1,199 @@
+        end
+    end
+end
+
+record('outlier indices unique and in range', indices_ok, ...
+    sprintf('records_checked=%d',C*R));
+
+record('only declared outlier samples are modified', ...
+    locations_ok && max_outside_change <= 1e-12, ...
+    sprintf('max_change_outside_outliers=%.3e',max_outside_change));
+
+record('outlier amplitudes match configured values', ...
+    amplitudes_ok, ...
+    sprintf('max_amplitude_error=%.3e',max_amplitude_error));
+
+record('positions/base amplitudes paired across multipliers', ...
+    pairing_ok, ...
+    sprintf('max_pairing_error=%.3e',max_pairing_error));
+
+record('stored outlier-added values are consistent', ...
+    stored_values_ok, ...
+    sprintf('conditions_checked=%d',conditions_checked));
+
+% Stored grids and metadata.
+grid_ok = isequal(data.outlier_count_values(:).',counts) && ...
+    isequal(data.outlier_amplitude_multipliers(:).',multipliers);
+record('stored count/multiplier grids match configuration', ...
+    grid_ok, ...
+    sprintf('counts=%s, multipliers=%s', ...
+    mat2str(data.outlier_count_values), ...
+    mat2str(data.outlier_amplitude_multipliers)));
+
+metadata_ok = data.number_of_samples == N && ...
+    data.number_of_experiments == R;
+record('dataset metadata consistent', metadata_ok, ...
+    sprintf('N=%d, R=%d', ...
+    data.number_of_samples,data.number_of_experiments));
+
+validation = table(check_name,passed,details, ...
+    'VariableNames',{'Check','Passed','Details'});
+
+end
+
+
+%% ========================================================================
+%  Parallel pool
+% ========================================================================
+
+function [parallel_mode_used, worker_count] = ...
+    prepare_parallel_pool(use_parallel, requested_worker_count)
+
+parallel_mode_used = false;
+worker_count = 1;
+
+if ~use_parallel
+    return;
+end
+
+if ~license('test', 'Distrib_Computing_Toolbox')
+    return;
+end
+
+try
+    pool = gcp('nocreate');
+
+    if isempty(pool)
+        if isempty(requested_worker_count)
+            pool = parpool('local');
+        else
+            pool = parpool('local', requested_worker_count);
+        end
+    end
+
+    parallel_mode_used = true;
+    worker_count = pool.NumWorkers;
+catch parallel_error
+    fprintf('Parallel pool could not be started: %s\n', ...
+        parallel_error.message);
+    parallel_mode_used = false;
+    worker_count = 1;
+end
+
+end
+
+
+%% ========================================================================
+%  Downsampling Monte Carlo experiments
+% ========================================================================
+
+function [result_table, condition_summary] = ...
+    run_downsampling_experiments(data, cfg, parallel_mode_used)
+
+R = data.number_of_experiments;
+count_values = data.outlier_count_values;
+mult_values = data.outlier_amplitude_multipliers;
+
+number_of_count_conditions = numel(count_values);
+number_of_multiplier_conditions = numel(mult_values);
+
+[experiment_grid, count_grid, multiplier_grid] = ndgrid( ...
+    1:R, ...
+    1:number_of_count_conditions, ...
+    1:number_of_multiplier_conditions);
+
+task_experiment_ids = experiment_grid(:);
+task_count_ids = count_grid(:);
+task_multiplier_ids = multiplier_grid(:);
+total_task_count = numel(task_experiment_ids);
+
+task_outputs = cell(total_task_count, 1);
+
+if parallel_mode_used
+    parfor task_id = 1:total_task_count
+        task_outputs{task_id} = run_one_downsampling_task( ...
+            task_id, task_experiment_ids, task_count_ids, ...
+            task_multiplier_ids, data, cfg);
+    end
+else
+    for task_id = 1:total_task_count
+        if task_id == 1 || mod(task_id, 25) == 0 || ...
+                task_id == total_task_count
+            fprintf('  Downsampling task %d / %d\n', ...
+                task_id, total_task_count);
+        end
+
+        task_outputs{task_id} = run_one_downsampling_task( ...
+            task_id, task_experiment_ids, task_count_ids, ...
+            task_multiplier_ids, data, cfg);
+    end
+end
+
+% Collect results
+id_success = false(total_task_count, 1);
+detected_count = zeros(total_task_count, 1);
+tp = zeros(total_task_count, 1);
+fp = zeros(total_task_count, 1);
+fn = zeros(total_task_count, 1);
+tn = zeros(total_task_count, 1);
+precision_value = zeros(total_task_count, 1);
+recall_value = zeros(total_task_count, 1);
+f1_value = zeros(total_task_count, 1);
+exact_match = false(total_task_count, 1);
+parameter_error = nan(total_task_count, 1);
+found_depth = nan(total_task_count, 1);
+found_rss = inf(total_task_count, 1);
+visited_node_count = zeros(total_task_count, 1);
+evaluated_model_count = zeros(total_task_count, 1);
+failed_identification_count = zeros(total_task_count, 1);
+detected_indices_text = cell(total_task_count, 1);
+last_error_text = cell(total_task_count, 1);
+
+for task_id = 1:total_task_count
+    current = task_outputs{task_id};
+
+    id_success(task_id) = current.IdentificationSucceeded;
+    detected_count(task_id) = current.DetectedCount;
+    tp(task_id) = current.TP;
+    fp(task_id) = current.FP;
+    fn(task_id) = current.FN;
+    tn(task_id) = current.TN;
+    precision_value(task_id) = current.Precision;
+    recall_value(task_id) = current.Recall;
+    f1_value(task_id) = current.F1;
+    exact_match(task_id) = current.ExactMatch;
+    parameter_error(task_id) = current.ParameterRelativeError;
+    found_depth(task_id) = current.FoundDepth;
+    found_rss(task_id) = current.FoundRSS;
+    visited_node_count(task_id) = current.VisitedNodeCount;
+    evaluated_model_count(task_id) = current.EvaluatedModelCount;
+    failed_identification_count(task_id) = ...
+        current.FailedIdentificationCount;
+    detected_indices_text{task_id} = ...
+        indices_to_text(current.DetectedIndices);
+    last_error_text{task_id} = current.LastError;
+end
+
+task_outlier_counts = reshape( ...
+    count_values(task_count_ids), [], 1);
+task_multipliers = reshape( ...
+    mult_values(task_multiplier_ids), [], 1);
+
+result_table = table( ...
+    (1:total_task_count).', ...
+    task_experiment_ids, ...
+    task_outlier_counts, ...
+    task_multipliers, ...
+    id_success, ...
+    detected_count, ...
+    tp, fp, fn, tn, ...
+    precision_value, recall_value, f1_value, ...
+    exact_match, ...
+    parameter_error, ...
+    found_depth, found_rss, ...
+    visited_node_count, evaluated_model_count, ...
+    failed_identification_count, ...
+    detected_indices_text, last_error_text, ...
+    'VariableNames', { ...
+    'TaskID', 'ExperimentID', 'OutlierCount', ...
+    'AmplitudeMultiplier', 'IdentificationSucceeded', ...

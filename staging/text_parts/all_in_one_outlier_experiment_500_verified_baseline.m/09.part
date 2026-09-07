@@ -1,0 +1,190 @@
+true_numerator = true_numerator(:).';
+true_denominator = true_denominator(:).';
+
+true_numerator = true_numerator / true_denominator(1);
+true_denominator = true_denominator / true_denominator(1);
+
+num_length = max( ...
+    numel(estimated_numerator), numel(true_numerator));
+den_length = max( ...
+    numel(estimated_denominator), numel(true_denominator));
+
+estimated_numerator = [ ...
+    zeros(1, num_length - numel(estimated_numerator)), ...
+    estimated_numerator];
+
+true_numerator = [ ...
+    zeros(1, num_length - numel(true_numerator)), ...
+    true_numerator];
+
+estimated_denominator = [ ...
+    zeros(1, den_length - numel(estimated_denominator)), ...
+    estimated_denominator];
+
+true_denominator = [ ...
+    zeros(1, den_length - numel(true_denominator)), ...
+    true_denominator];
+
+estimated_vector = [estimated_numerator, estimated_denominator];
+true_vector = [true_numerator, true_denominator];
+
+error_value = norm(estimated_vector - true_vector, 2) / ...
+    max(norm(true_vector, 2), eps);
+
+end
+
+
+%% ========================================================================
+%  Result summaries
+% ========================================================================
+
+function summary = summarize_detection_results( ...
+    result_table, count_values, mult_values, method_name)
+
+row_count = numel(count_values) * numel(mult_values);
+
+OutlierCount = zeros(row_count, 1);
+AmplitudeMultiplier = zeros(row_count, 1);
+ExperimentCount = zeros(row_count, 1);
+
+IdentificationSuccessRate = zeros(row_count, 1);
+ExactMatchRate = zeros(row_count, 1);
+
+MeanTP = zeros(row_count, 1);
+MeanFP = zeros(row_count, 1);
+MeanFN = zeros(row_count, 1);
+MeanTN = zeros(row_count, 1);
+
+Precision = zeros(row_count, 1);
+Recall = zeros(row_count, 1);
+F1 = zeros(row_count, 1);
+
+MeanParameterRelativeError = nan(row_count, 1);
+
+% Patch-only fields remain NaN for Downsampling.
+DetectionEvaluatedRate = nan(row_count, 1);
+IterationConvergenceRate = nan(row_count, 1);
+PrecleanFallbackRate = nan(row_count, 1);
+MeanOuterIterations = nan(row_count, 1);
+MeanIdentificationFitPercent = nan(row_count, 1);
+MeanRMSEBefore = nan(row_count, 1);
+MeanRMSEAfter = nan(row_count, 1);
+MeanRMSEReductionPercent = nan(row_count, 1);
+MeanAdaptiveScoreThreshold = nan(row_count, 1);
+MeanGlobalNoiseScale = nan(row_count, 1);
+
+row = 0;
+
+for count_id = 1:numel(count_values)
+    for multiplier_id = 1:numel(mult_values)
+        row = row + 1;
+
+        current_count = count_values(count_id);
+        current_multiplier = mult_values(multiplier_id);
+
+        mask = result_table.OutlierCount == current_count & ...
+            result_table.AmplitudeMultiplier == current_multiplier;
+
+        ExperimentCount(row) = sum(mask);
+        OutlierCount(row) = current_count;
+        AmplitudeMultiplier(row) = current_multiplier;
+
+        IdentificationSuccessRate(row) = mean( ...
+            result_table.IdentificationSucceeded(mask));
+        ExactMatchRate(row) = mean(result_table.ExactMatch(mask));
+
+        MeanTP(row) = mean(result_table.TP(mask));
+        MeanFP(row) = mean(result_table.FP(mask));
+        MeanFN(row) = mean(result_table.FN(mask));
+        MeanTN(row) = mean(result_table.TN(mask));
+
+        total_tp = sum(result_table.TP(mask));
+        total_fp = sum(result_table.FP(mask));
+        total_fn = sum(result_table.FN(mask));
+
+        Precision(row) = safe_divide( ...
+            total_tp, total_tp + total_fp);
+        Recall(row) = safe_divide( ...
+            total_tp, total_tp + total_fn);
+        F1(row) = safe_divide( ...
+            2 * Precision(row) * Recall(row), ...
+            Precision(row) + Recall(row));
+
+        valid_parameter_mask = mask & ...
+            isfinite(result_table.ParameterRelativeError);
+
+        if any(valid_parameter_mask)
+            MeanParameterRelativeError(row) = mean( ...
+                result_table.ParameterRelativeError( ...
+                valid_parameter_mask));
+        end
+
+        if strcmpi(method_name, 'patch')
+            DetectionEvaluatedRate(row) = mean( ...
+                result_table.DetectionEvaluated(mask));
+            IterationConvergenceRate(row) = mean( ...
+                result_table.IterationConverged(mask));
+            PrecleanFallbackRate(row) = mean( ...
+                result_table.PrecleanFallbackUsed(mask));
+            MeanOuterIterations(row) = mean( ...
+                result_table.OuterIterations(mask));
+
+            valid_fit = mask & ...
+                isfinite(result_table.IdentificationFitPercent);
+            if any(valid_fit)
+                MeanIdentificationFitPercent(row) = mean( ...
+                    result_table.IdentificationFitPercent(valid_fit));
+            end
+
+            MeanRMSEBefore(row) = mean( ...
+                result_table.RMSEBefore(mask), 'omitnan');
+            MeanRMSEAfter(row) = mean( ...
+                result_table.RMSEAfter(mask), 'omitnan');
+            MeanRMSEReductionPercent(row) = mean( ...
+                result_table.RMSEReductionPercent(mask), 'omitnan');
+            MeanAdaptiveScoreThreshold(row) = mean( ...
+                result_table.AdaptiveScoreThreshold(mask), 'omitnan');
+            MeanGlobalNoiseScale(row) = mean( ...
+                result_table.GlobalNoiseScale(mask), 'omitnan');
+        end
+    end
+end
+
+summary = table( ...
+    OutlierCount, AmplitudeMultiplier, ExperimentCount, ...
+    IdentificationSuccessRate, ExactMatchRate, ...
+    MeanTP, MeanFP, MeanFN, MeanTN, ...
+    Precision, Recall, F1, ...
+    MeanParameterRelativeError, ...
+    DetectionEvaluatedRate, ...
+    IterationConvergenceRate, ...
+    PrecleanFallbackRate, ...
+    MeanOuterIterations, ...
+    MeanIdentificationFitPercent, ...
+    MeanRMSEBefore, MeanRMSEAfter, ...
+    MeanRMSEReductionPercent, ...
+    MeanAdaptiveScoreThreshold, ...
+    MeanGlobalNoiseScale);
+
+end
+
+
+function comparison = build_comparison_table( ...
+    down_summary, patch_summary)
+
+if ~isequal(down_summary.OutlierCount, patch_summary.OutlierCount) || ...
+        ~isequal(down_summary.AmplitudeMultiplier, ...
+        patch_summary.AmplitudeMultiplier)
+    error('all_in_one:SummaryGridMismatch', ...
+        'The two method summaries use different condition grids.');
+end
+
+comparison = table();
+
+comparison.OutlierCount = down_summary.OutlierCount;
+comparison.AmplitudeMultiplier = ...
+    down_summary.AmplitudeMultiplier;
+comparison.ExperimentCount = down_summary.ExperimentCount;
+
+comparison.Down_IDSuccess = ...
+    down_summary.IdentificationSuccessRate;

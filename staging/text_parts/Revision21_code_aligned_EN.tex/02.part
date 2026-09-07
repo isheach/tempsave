@@ -1,0 +1,151 @@
+\med\left(\{|e_k^{(i)}-m_e^{(i)}|\}\right),
+\end{align}
+and define $q_k^{(i)}=e_k^{(i)}/\sigma_e^{(i)}$. Parameter updating uses the quadratic--linear robust loss
+\begin{equation}
+\rho_\delta(q)=\begin{cases}
+q^2,&|q|\le\delta,\\
+2\delta|q|-\delta^2,&|q|>\delta,
+\end{cases}
+\end{equation}
+so that
+\begin{equation}
+(\hat\theta_p^{(i)},\hat x_{1,p}^{(i)})=
+\arg\min_{\theta\in\Theta_s,\,x_1}
+\sum_k\rho_\delta\!\left(q_k^{(i)}\right).
+\end{equation}
+Using all original-rate samples, $\hat\theta_p^{(i)}$ produces the one-step prediction for iteration $i$,
+\begin{equation}
+\hat y_{p,k}^{(i)}=\hat y_k(\hat\theta_p^{(i)}),
+\end{equation}
+while the detection residual is always formed against the original measured output,
+\begin{equation}
+r_{p,k}^{(i)}=\bar y_k-\hat y_{p,k}^{(i)}.
+\end{equation}
+If the first robust identification does not produce a valid stable model, a one-time multi-scale Patch precleaning is applied directly to $\bar y_k$; samples detected in this preliminary step are replaced by the local trend before identification is retried.
+
+\subsection{Local Quadratic Patch Modeling and Multi-Scale Fusion}
+Let $L_\ell$ be the Patch length at scale $\ell$, and let $\mathcal P_{\ell,p}$ denote the samples covered by Patch $p$. Using a normalized local coordinate $x\in[-1,1]$, the nominal residual trend is modeled as
+\begin{equation}
+\tilde r_{\ell,p}^{(i)}(x)=a_0+a_1x+a_2x^2.
+\end{equation}
+The coefficients are obtained by iteratively reweighted least squares with bisquare weights. For $k\in\mathcal P_{\ell,p}$, define
+\begin{equation}
+e_{\ell,p,k}^{(i)}=r_{p,k}^{(i)}-\tilde r_{\ell,p,k}^{(i)}.
+\end{equation}
+The robust local center and scale are
+\begin{align}
+m_{\ell,p}^{(i)}&=\med\left(\{e_{\ell,p,k}^{(i)}:k\in\mathcal P_{\ell,p}\}\right),\\
+s_{\ell,p}^{(i)}&=1.4826\,\med\left(\{|e_{\ell,p,k}^{(i)}-m_{\ell,p}^{(i)}|:k\in\mathcal P_{\ell,p}\}\right).
+\end{align}
+
+To prevent numerical degeneration when the residual scale is very small, define
+\begin{align}
+h^{(i)}&=\max\left\{1,\max_k|r_{p,k}^{(i)}|,
+\max_k r_{p,k}^{(i)}-\min_k r_{p,k}^{(i)}\right\},\\
+s_0^{(i)}&=\max\{s_a,s_r h^{(i)}\}.
+\end{align}
+Let the robust center of the first differences be
+\begin{equation}
+m_\Delta^{(i)}=\med\left(\{\Delta r_{p,k}^{(i)}\}\right).
+\end{equation}
+The global variation scale is then
+\begin{equation}
+s_g^{(i)}=\max\left\{
+\frac{1.4826}{\sqrt 2}\med\left(\{|\Delta r_{p,k}^{(i)}-m_\Delta^{(i)}|\}\right),
+s_0^{(i)}\right\}.
+\end{equation}
+For scale $\ell$, let
+\begin{equation}
+\omega_\ell=\frac{\eta}{L_\ell+\eta}.
+\end{equation}
+The regularized scale is
+\begin{equation}
+s_{\ell,p}^{r,(i)}=
+\sqrt{(1-\omega_\ell)(s_{\ell,p}^{(i)})^2+
+\omega_\ell(s_g^{(i)})^2},
+\end{equation}
+and the scale used for standardization is
+\begin{equation}
+s_{\ell,p}^{*,(i)}=
+\max\{s_{\ell,p}^{(i)},s_{\ell,p}^{r,(i)},s_0^{(i)}\}.
+\end{equation}
+The corresponding Patch score is
+\begin{equation}
+z_{\ell,p,k}^{(i)}=\frac{|e_{\ell,p,k}^{(i)}|}{s_{\ell,p}^{*,(i)}}.
+\end{equation}
+
+Overlapping Patches at the same scale are fused by medians,
+\begin{align}
+\tilde r_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}\tilde r_{\ell,p,k}^{(i)},\\
+z_{\ell,k}^{(i)}&=\med_{p:k\in\mathcal P_{\ell,p}}z_{\ell,p,k}^{(i)},
+\end{align}
+and the cross-scale quantities are
+\begin{align}
+\tilde r_{p,k}^{(i)}&=\med_{\ell}\tilde r_{\ell,k}^{(i)},\\
+z_{p,k}^{(i)}&=\med_{\ell}z_{\ell,k}^{(i)}.
+\end{align}
+
+\subsection{Adaptive Threshold, Multi-Scale Support, and Repair}
+Let $N_v$ be the number of finite fused scores and let $\alpha$ be the target sequence-level false-alarm probability. Define
+\begin{equation}
+\tau_g=\sqrt 2\,\operatorname{erfc}^{-1}\!\left(\frac{\alpha}{N_v}\right).
+\end{equation}
+Let $\mathcal Z_i$ be the set of finite $z_{p,k}^{(i)}$ values, with
+\begin{align}
+m_z^{(i)}&=\med(\mathcal Z_i),\\
+s_z^{(i)}&=1.4826\,\med\left(\{|z_{p,k}^{(i)}-m_z^{(i)}|\}\right).
+\end{align}
+The adaptive threshold is
+\begin{equation}
+\tau^{(i)}=\max\{\tau_g,m_z^{(i)}+\tau_gs_z^{(i)}\}.
+\end{equation}
+The number of supporting scales for sample $k$ is
+\begin{equation}
+c_k^{(i)}=\sum_{\ell}\ind\!\left(z_{\ell,k}^{(i)}>\tau^{(i)}\right),
+\end{equation}
+where $\ind(\cdot)$ equals one when its argument is true and zero otherwise. The detected set is
+\begin{equation}
+\Oh_p^{(i)}=\left\{k:z_{p,k}^{(i)}>\tau^{(i)},\;c_k^{(i)}\ge R\right\}.
+\end{equation}
+
+Detected samples are repaired by combining the model prediction and the estimated nominal residual trend,
+\begin{equation}
+\bar y_k^{(i)}=\begin{cases}
+\hat y_{p,k}^{(i)}+\tilde r_{p,k}^{(i)},&k\in\Oh_p^{(i)},\\
+\bar y_k,&k\notin\Oh_p^{(i)}.
+\end{cases}
+\end{equation}
+From the second iteration onward, the relative change between successive repaired outputs is
+\begin{equation}
+d_i=\frac{\|\bar{\bm y}^{(i)}-\bar{\bm y}^{(i-1)}\|_2}
+{\max\{\|\bar{\bm y}^{(i-1)}\|_2,\epsilon\}},\qquad i\ge2.
+\end{equation}
+The iteration stops when the detected set is unchanged and $d_i$ is below a prescribed tolerance, or when the maximum number of outer iterations is reached.
+
+\section{Simulation Experiments}
+The system is
+\begin{equation}
+G_0(s)=\frac{1}{s^2+2s+1}.
+\end{equation}
+A unit-step input is applied from zero initial state, and the continuous-time response is sampled at $T_s=0.01$~s to form a 500-sample sequence. Three outlier counts, 5, 10, and 15, are tested. The base outlier values used in the experiments are
+\begin{equation}
+\begin{aligned}
+&[0.26,-0.38,-0.30,-0.24,-0.10,-0.22,0.36,-0.32,\\
+&\quad 0.32,0.38,0.18,0.20,-0.26,0.28,-0.34].
+\end{aligned}
+\end{equation}
+The 5-, 10-, and 15-outlier conditions use the first 5, 10, and 15 entries, respectively, and the values are multiplied by $0.25$, $0.5$, $1$, $2$, or $4$. For a fixed outlier count and experiment index, all five multipliers share the same outlier locations and base values. Each count--multiplier condition is repeated 100 times.
+
+Let $\mathcal O$ be the true outlier-index set and $\Oh$ the detected set. The pointwise counts are
+\begin{align}
+\mathrm{TP}&=|\mathcal O\cap\Oh|,\\
+\mathrm{FP}&=|\Oh\setminus\mathcal O|,\\
+\mathrm{FN}&=|\mathcal O\setminus\Oh|,\\
+\mathrm{TN}&=N-\mathrm{TP}-\mathrm{FP}-\mathrm{FN}.
+\end{align}
+The derived measures are
+\begin{align}
+\mathrm{Precision}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}},\\
+\mathrm{Recall}&=\frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FN}},\\
+F1&=\frac{2\,\mathrm{Precision}\,\mathrm{Recall}}{\mathrm{Precision}+\mathrm{Recall}}.
+\end{align}

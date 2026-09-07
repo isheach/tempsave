@@ -1,0 +1,248 @@
+    child_targets = candidate(child_id).Targets;
+
+    if floor(numel(child_targets)/K) < ...
+            cfg.DownMinimumTargetRows
+
+        result.Found = true;
+        result.Model = candidate(child_id).Model;
+        result.Targets = child_targets;
+        result.Path = [path,child_id];
+        result.Criterion = candidate(child_id).Criterion;
+        return;
+    end
+
+    descendant = downsampling_search( ...
+        Y, child_targets, lags, cfg, ...
+        depth+1, [path,child_id]);
+
+    result.NodesEvaluated = ...
+        result.NodesEvaluated + descendant.NodesEvaluated;
+
+    if descendant.Found
+        result = descendant;
+        result.NodesEvaluated = ...
+            result.NodesEvaluated + 1;
+        return;
+    end
+end
+
+result.Found = true;
+result.Model = candidate(best_id).Model;
+result.Targets = candidate(best_id).Targets;
+result.Path = [path,best_id];
+result.Criterion = candidate(best_id).Criterion;
+
+end
+
+
+function value = robust_child_criterion(E)
+
+row_energy = sum(E.^2,2);
+row_energy = row_energy(isfinite(row_energy));
+
+if isempty(row_energy)
+    value = Inf;
+    return;
+end
+
+value = median(row_energy);
+
+end
+
+
+%% ========================================================================
+% Patch
+% ========================================================================
+
+function result = run_patch_method(Y_original, structure, gamma, cfg)
+
+Y_repaired = Y_original;
+previous_detected = false(size(Y_original,1),1);
+converged = false;
+
+final_score = nan(size(Y_original,1),1);
+final_prediction = nan(size(Y_original));
+final_residual = nan(size(Y_original));
+final_trend = zeros(size(Y_original));
+
+for iteration_id = 1:cfg.PatchMaximumOuterIterations
+
+    model = fit_model_on_full_record( ...
+        Y_repaired, structure.Lags, cfg, ...
+        cfg.PatchFitTrimFraction);
+
+    [prediction_from_repaired,~,valid] = ...
+        predict_var_complete( ...
+        Y_repaired, model, structure.Lags);
+
+    residual_against_original = ...
+        Y_original - prediction_from_repaired;
+
+    patch = local_patch_score_from_residual( ...
+        residual_against_original, valid, cfg);
+
+    detected = valid & patch.Score > gamma;
+
+    Y_new = Y_repaired;
+
+    for channel_id = 1:size(Y_original,2)
+
+        replacement = ...
+            prediction_from_repaired(:,channel_id) + ...
+            patch.ExpectedResidual(:,channel_id);
+
+        ids = detected & isfinite(replacement);
+        Y_new(ids,channel_id) = replacement(ids);
+    end
+
+    relative_change = norm(Y_new-Y_repaired,'fro') / ...
+        max(norm(Y_repaired,'fro'),eps);
+
+    same_set = isequal(detected,previous_detected);
+
+    Y_repaired = Y_new;
+    previous_detected = detected;
+
+    final_score = patch.Score;
+    final_prediction = prediction_from_repaired;
+    final_residual = residual_against_original;
+    final_trend = patch.ExpectedResidual;
+
+    if iteration_id >= 2 && ...
+            same_set && relative_change <= cfg.PatchRepairTolerance
+        converged = true;
+        break;
+    end
+end
+
+result = struct();
+result.DetectedMask = previous_detected;
+result.Score = final_score;
+result.Prediction = final_prediction;
+result.Residual = final_residual;
+result.ExpectedResidual = final_trend;
+result.RepairedY = Y_repaired;
+result.Aux1 = iteration_id;
+result.Aux2 = double(converged);
+
+end
+
+
+function out = patch_residual_score( ...
+    Y, model, lags, cfg)
+
+[~, residual, valid] = ...
+    predict_var_complete(Y,model,lags);
+
+out = local_patch_score_from_residual( ...
+    residual,valid,cfg);
+
+end
+
+
+function out = local_patch_score_from_residual( ...
+    residual, valid, cfg)
+
+N = size(residual,1);
+d = size(residual,2);
+
+% Memory-efficient fusion: with 50% overlapping windows every point is
+% covered by only a few windows.  We accumulate window estimates instead
+% of allocating an N-by-number_of_windows array (important for Dodgers,
+% which has about 50k samples).
+score_by_scale = nan(N,numel(cfg.PatchWindowLengths));
+trend_by_scale = nan(N,d,numel(cfg.PatchWindowLengths));
+
+for scale_id = 1:numel(cfg.PatchWindowLengths)
+
+    L = min(cfg.PatchWindowLengths(scale_id),N);
+
+    if L < cfg.PatchPolynomialOrder+3
+        continue;
+    end
+
+    if mod(L,2)==0
+        L = max(cfg.PatchPolynomialOrder+3,L-1);
+    end
+
+    stride = max(1,round(L*(1-cfg.PatchOverlapRatio)));
+    starts = make_window_starts(N,L,stride);
+
+    score_sum = zeros(N,1);
+    score_count = zeros(N,1);
+
+    trend_sum = zeros(N,d);
+    trend_count = zeros(N,d);
+
+    for window_id = 1:numel(starts)
+
+        idx = starts(window_id):(starts(window_id)+L-1);
+
+        if sum(valid(idx)) < cfg.PatchPolynomialOrder+3
+            continue;
+        end
+
+        channel_score = nan(L,d);
+
+        for channel_id = 1:d
+
+            y = residual(idx,channel_id);
+
+            [trend,scale] = robust_polynomial_trend( ...
+                y,cfg.PatchPolynomialOrder, ...
+                cfg.PatchIRLSIterations, ...
+                cfg.PatchBisquareTuningConstant, ...
+                cfg.MinimumScale);
+
+            good_trend = isfinite(trend);
+            active_idx = idx(good_trend);
+
+            trend_sum(active_idx,channel_id) = ...
+                trend_sum(active_idx,channel_id) + ...
+                trend(good_trend);
+
+            trend_count(active_idx,channel_id) = ...
+                trend_count(active_idx,channel_id) + 1;
+
+            channel_score(:,channel_id) = ...
+                abs(y-trend)/max(scale,cfg.MinimumScale);
+        end
+
+        window_score = max(channel_score,[],2,'omitnan');
+        good_score = isfinite(window_score);
+        active_idx = idx(good_score);
+
+        score_sum(active_idx) = ...
+            score_sum(active_idx) + window_score(good_score);
+
+        score_count(active_idx) = ...
+            score_count(active_idx) + 1;
+    end
+
+    scale_score = nan(N,1);
+    covered = score_count>0;
+    scale_score(covered) = ...
+        score_sum(covered)./score_count(covered);
+
+    score_by_scale(:,scale_id) = scale_score;
+
+    for channel_id = 1:d
+        covered = trend_count(:,channel_id)>0;
+        tmp = nan(N,1);
+        tmp(covered) = ...
+            trend_sum(covered,channel_id) ./ ...
+            trend_count(covered,channel_id);
+        trend_by_scale(:,channel_id,scale_id) = tmp;
+    end
+end
+
+score = max(score_by_scale,[],2,'omitnan');
+expected_residual = median(trend_by_scale,3,'omitnan');
+
+score(~valid) = NaN;
+
+for channel_id = 1:d
+    missing = ~isfinite(expected_residual(:,channel_id));
+    expected_residual(missing,channel_id) = 0;
+end
+

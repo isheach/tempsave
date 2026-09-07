@@ -1,0 +1,139 @@
+\hat x_{k+1}&=F_\theta\hat x_k+H_\theta u_k,\\
+\hat y_k(\theta,x_1)&=C_x(\theta)\hat x_k+D_x(\theta)u_k,
+\end{align}
+其中 $x_1$ 为预测所采用的初始状态。
+
+对于原始测量输出，预测误差定义为
+\begin{equation}
+e_k(\theta,x_1)=\bar y_k-\hat y_k(\theta,x_1),
+\end{equation}
+相应的预测误差准则为
+\begin{equation}
+J(\theta,x_1)=\sum_{k=1}^{N_e}\left[e_k(\theta,x_1)\right]^2,
+\end{equation}
+参数与初始状态估计满足
+\begin{equation}
+(\hat\theta,\hat x_1)=\arg\min_{\theta\in\Theta_s,\,x_1}J(\theta,x_1),
+\end{equation}
+其中 $\Theta_s$ 为稳定连续时间模型集合。当完整输出对应的初始状态已知时，$x_1$ 固定为该已知值；对于从原始输出中抽取并从非零时刻开始的下采样子序列，初始状态与模型参数一同估计。由于 $F_\theta$ 和 $H_\theta$ 非线性依赖于 $\theta$，该问题通过迭代预测误差最小化求解。若 $\Psi_q$ 为第 $q$ 次迭代处的预测灵敏度矩阵，$\bm e_q$ 为对应的预测误差向量，则局部阻尼最小二乘步可写为
+\begin{equation}
+(\Psi_q^{\mathsf T}\Psi_q+\lambda_qI)\Delta\theta_q
+=\Psi_q^{\mathsf T}\bm e_q,
+\end{equation}
+并在预测误差下降且连续时间模型保持稳定时接受参数更新。
+
+\subsection{下采样划分与树搜索}
+原采样率序列构成搜索树根节点。设当前节点包含按时间排序的样本索引
+\begin{equation}
+\mathcal I=\{i_1,i_2,\ldots,i_M\},
+\end{equation}
+其中 $M=|\mathcal I|$；在根节点处 $M=N$。给定划分数 $K$，当前节点被划分为 $K$ 个不重叠子节点，
+\begin{equation}
+\mathcal I_j=\{i_j,i_{j+K},i_{j+2K},\ldots\},\qquad j=1,\ldots,K.
+\end{equation}
+每向下一层划分一次，子序列采样周期变为父节点采样周期的 $K$ 倍。若 $N_j=|\mathcal I_j|$ 满足最小辨识长度要求，则对子节点 $j$ 进行连续时间模型估计。
+
+令 $\bar y_{j,\ell}$ 和 $u_{j,\ell}$，$\ell=1,\ldots,N_j$，表示由 $\mathcal I_j$ 选出的输出与输入，并令 $x_{j,1}$ 为该子序列的初始状态。子节点的预测误差准则为
+\begin{equation}
+J_j(\theta,x_{j,1})=
+\sum_{\ell=1}^{N_j}
+\left[\bar y_{j,\ell}-\hat y_{j,\ell}(\theta,x_{j,1})\right]^2,
+\end{equation}
+其参数与初始状态估计为
+\begin{equation}
+(\hat\theta_j,\hat x_{j,1})=
+\arg\min_{\theta\in\Theta_s,\,x_{j,1}}J_j(\theta,x_{j,1}).
+\end{equation}
+定义该子节点优化后的残差平方和为
+\begin{equation}
+q_j=J_j(\hat\theta_j,\hat x_{j,1}).
+\end{equation}
+若
+\begin{equation}
+q_j<\varepsilon_R,
+\end{equation}
+则该子节点满足接受条件。若多个子节点同时满足条件，则返回 $q_j$ 最小的模型；若当前层没有子节点被接受，则按照 $q_j$ 从小到大的顺序搜索仍可继续划分的子节点，并在某一分支失败后返回父节点继续考察下一分支。树搜索最终返回的参数记为 $\hat\theta_d$。
+
+\subsection{基于残差的异常点检测}
+树搜索得到 $\hat\theta_d$ 后，在原采样率完整输出上重新计算一步预测，记为
+\begin{equation}
+\hat y_{d,k}=\hat y_k(\hat\theta_d).
+\end{equation}
+检测残差定义为
+\begin{equation}
+r_{d,k}=\bar y_k-\hat y_{d,k}.
+\end{equation}
+构造完整残差集合
+\begin{equation}
+\mathcal R_d=\{r_{d,1},r_{d,2},\ldots,r_{d,N}\},
+\end{equation}
+其稳健中心与尺度为
+\begin{align}
+m_d&=\med(\mathcal R_d),\\
+\mathrm{MAD}_d&=\med\left(\{|r_{d,k}-m_d|:k=1,\ldots,N\}\right),\\
+s_d&=1.4826\,\mathrm{MAD}_d.
+\end{align}
+最终检测集合为
+\begin{equation}
+\Oh_d=\{k:|r_{d,k}-m_d|>\gamma_d s_d\}.
+\end{equation}
+
+\section{多尺度 Patch 异常值检测}
+Patch 方法的核心思路是在原采样率下交替进行稳健模型估计、局部残差分析和异常输出修复。与下采样方法不同，Patch 不通过降低采样率寻找辨识子序列，而是在完整输出的一步预测残差上利用多个重叠时间尺度估计局部正常趋势，并综合各尺度的异常证据。原始测量输出仍记为 $\bar y_k$；第 $i$ 次修复后的输出记为 $\bar y_k^{(i)}$，$i=1,2,\ldots$。第一轮模型由 $\bar y_k$ 估计，后续第 $i\ge2$ 轮模型由上一轮修复输出 $\bar y_k^{(i-1)}$ 估计，而每一轮的检测残差始终相对于原始测量输出 $\bar y_k$ 计算。
+
+\subsection{模型更新与检测残差}
+第 $i$ 次迭代中的辨识误差写为
+\begin{equation}
+e_k^{(i)}(\theta,x_1)=
+\begin{cases}
+\bar y_k-\hat y_k(\theta,x_1),& i=1,\\
+\bar y_k^{(i-1)}-\hat y_k(\theta,x_1),& i\ge2.
+\end{cases}
+\end{equation}
+令
+\begin{align}
+m_e^{(i)}&=\med\left(\{e_k^{(i)}\}\right),\\
+\sigma_e^{(i)}&=\frac{1}{0.7}
+\med\left(\{|e_k^{(i)}-m_e^{(i)}|\}\right),
+\end{align}
+并定义标准化误差 $q_k^{(i)}=e_k^{(i)}/\sigma_e^{(i)}$。参数更新采用二次--线性稳健损失
+\begin{equation}
+\rho_\delta(q)=\begin{cases}
+q^2,&|q|\le\delta,\\
+2\delta|q|-\delta^2,&|q|>\delta,
+\end{cases}
+\end{equation}
+从而
+\begin{equation}
+(\hat\theta_p^{(i)},\hat x_{1,p}^{(i)})=
+\arg\min_{\theta\in\Theta_s,\,x_1}
+\sum_k\rho_\delta\!\left(q_k^{(i)}\right).
+\end{equation}
+在全部原采样率样本上，由 $\hat\theta_p^{(i)}$ 产生第 $i$ 轮一步预测
+\begin{equation}
+\hat y_{p,k}^{(i)}=\hat y_k(\hat\theta_p^{(i)}),
+\end{equation}
+而检测残差始终定义为
+\begin{equation}
+r_{p,k}^{(i)}=\bar y_k-\hat y_{p,k}^{(i)}.
+\end{equation}
+若第一轮稳健辨识不能得到有效稳定模型，则先对 $\bar y_k$ 进行一次多尺度 Patch 预清理，以局部趋势替换初步检测出的样本，再重新尝试模型辨识。
+
+\subsection{局部二次 Patch 建模与多尺度融合}
+设 $L_\ell$ 为尺度 $\ell$ 下的 Patch 长度，$\mathcal P_{\ell,p}$ 表示第 $p$ 个 Patch 覆盖的样本集合。使用归一化局部坐标 $x\in[-1,1]$，正常残差趋势表示为
+\begin{equation}
+\tilde r_{\ell,p}^{(i)}(x)=a_0+a_1x+a_2x^2.
+\end{equation}
+二次曲线系数通过带 bisquare 权重的迭代重加权最小二乘获得。对于 $k\in\mathcal P_{\ell,p}$，定义局部误差
+\begin{equation}
+e_{\ell,p,k}^{(i)}=r_{p,k}^{(i)}-\tilde r_{\ell,p,k}^{(i)}.
+\end{equation}
+其稳健中心与尺度为
+\begin{align}
+m_{\ell,p}^{(i)}&=\med\left(\{e_{\ell,p,k}^{(i)}:k\in\mathcal P_{\ell,p}\}\right),\\
+s_{\ell,p}^{(i)}&=1.4826\,\med\left(\{|e_{\ell,p,k}^{(i)}-m_{\ell,p}^{(i)}|:k\in\mathcal P_{\ell,p}\}\right).
+\end{align}
+
+为避免残差尺度过小时出现数值退化，定义
+\begin{align}
+h^{(i)}&=\max\left\{1,\max_k|r_{p,k}^{(i)}|,

@@ -1,0 +1,172 @@
+function results = run_real_dataset_two_methods_fixed_fixed(dataset_root, user_cfg)
+% RUN_REAL_DATASET_TWO_METHODS
+%
+% Evaluate the current Downsampling and Patch ideas on the anomaly datasets
+% recently added under:
+%
+%   report/可能有用/
+%
+% The code is intentionally self-contained and does NOT require System
+% Identification Toolbox.  These benchmark datasets contain only observed
+% time-series channels and do not provide a physical exogenous input u(k),
+% so a continuous-time transfer function estimated by tfest is not
+% identifiable in the same sense as in the paper's simulation experiment.
+% For these datasets we therefore use a one-step multivariate
+% autoregressive predictor (VAR with an automatically selected lag
+% structure) as the common identification model.  The two outlier
+% detection methods differ in how the model parameters and residual
+% outliers are handled:
+%
+%   Downsampling:
+%     1) use a fixed lag structure selected without test labels;
+%     2) search K-way downsampled target-index subsets for a clean model;
+%     3) evaluate the accepted model on the complete record;
+%     4) detect with median + consistency-corrected MAD and a gamma
+%        multiplier calibrated from training data when available.
+%
+%   Patch:
+%     1) use the same fixed lag structure;
+%     2) identify a robust initial model;
+%     3) form complete-record one-step residuals;
+%     4) compute overlapping local quadratic Patch residual scores;
+%     5) detect using a Patch gamma calibrated from training data;
+%     6) repair detected samples with model prediction + local residual
+%        trend and re-identify, up to a small number of outer iterations.
+%
+% Training / validation protocol
+% ------------------------------
+% If a dataset folder contains train_no_anomaly.csv and train_anomaly.csv:
+%   - model lag structure is selected using train_no_anomaly.csv;
+%   - gamma values are tuned using train_anomaly.csv labels ONLY;
+%   - test.csv labels are used ONLY for final evaluation.
+%
+% If only train_no_anomaly.csv exists:
+%   - structure is selected from that normal training set;
+%   - gamma is calibrated to a target training false-positive rate.
+%
+% If only train_anomaly.csv exists:
+%   - normal labelled rows are used for structure selection;
+%   - gamma is tuned on the labelled training record.
+%
+% If no training file exists (e.g. CalIt2 / Dodgers in the current repo):
+%   - structure is estimated robustly from test.csv WITHOUT using labels;
+%   - fixed unsupervised gamma defaults are used;
+%   - test labels are still used only after detection for TP/TN/FP/FN.
+%
+% Metrics
+% -------
+% Point-wise TP, TN, FP, FN, Precision, Recall, Specificity, F1,
+% Accuracy, BalancedAccuracy and MCC are written for each method.
+%
+% Usage
+% -----
+% From the root of a local clone of isheach/report:
+%
+%   results = run_real_dataset_two_methods_fixed;
+%
+% or:
+%
+%   results = run_real_dataset_two_methods_fixed(fullfile(pwd,'可能有用'));
+%
+% Optional:
+%
+%   cfg = struct;
+%   cfg.DatasetFilter = ["CalIt2","Dodgers","GutenTAG/ecg-noise-10%"];
+%   results = run_real_dataset_two_methods_fixed(fullfile(pwd,'可能有用'), cfg);
+%
+% Output
+% ------
+%   real_dataset_two_method_results_fixed/
+%       real_dataset_two_method_results_fixed.xlsx
+%       real_dataset_two_method_results_fixed.mat
+%
+% The XLSX file contains:
+%   Summary     - one row per dataset and method
+%   Tuning      - selected lag structure and threshold calibration
+%   DatasetInfo - input files and dimensions
+%   Failures    - datasets that could not be processed
+%
+% -------------------------------------------------------------------------
+% Important interpretation note
+% -------------------------------------------------------------------------
+% This benchmark adaptation tests the Downsampling/Patch OUTLIER-DETECTION
+% framework on generic time-series datasets.  It does not claim that a
+% physical continuous-time transfer function G(s) exists for datasets that
+% have no exogenous input.  The original tfest-based simulation experiment
+% should remain the experiment used to validate continuous-time parameter
+% identification.
+%
+
+if nargin < 1 || isempty(dataset_root)
+    dataset_root = fullfile(pwd, '可能有用');
+end
+
+if nargin < 2
+    user_cfg = struct();
+end
+
+cfg = default_config();
+cfg = merge_struct(cfg, user_cfg);
+
+if ~isfolder(dataset_root)
+    error('realbench:DatasetRootNotFound', ...
+        'Dataset root does not exist: %s', dataset_root);
+end
+
+fprintf('============================================================\n');
+fprintf(' Real anomaly-dataset benchmark: Downsampling vs Patch\n');
+fprintf('============================================================\n');
+fprintf('Dataset root: %s\n', dataset_root);
+
+specs = discover_datasets(dataset_root, cfg);
+
+if isempty(specs)
+    error('realbench:NoDatasetsFound', ...
+        'No supported test CSV files were found under %s.', dataset_root);
+end
+
+fprintf('Discovered %d dataset(s).\n\n', numel(specs));
+
+output_dir = fullfile(pwd, cfg.OutputDirectory);
+if ~exist(output_dir, 'dir')
+    mkdir(output_dir);
+end
+
+% Preallocate the correct number of columns.
+% This is important when one of the collections remains empty.  In the
+% previous version, failure_rows={} was a 0-by-0 cell; if all datasets
+% succeeded, cell2table(...,3 VariableNames) failed at the very end.
+summary_rows = cell(0, numel(summary_variable_names()));
+tuning_rows = cell(0, 11);
+dataset_rows = cell(0, 10);
+failure_rows = cell(0, 3);
+
+for dataset_id = 1:numel(specs)
+
+    spec = specs(dataset_id);
+
+    fprintf('[%d/%d] %s\n', dataset_id, numel(specs), spec.Name);
+
+    try
+        test_data = read_benchmark_csv(spec.TestPath);
+
+        train_normal = [];
+        train_labelled = [];
+
+        if strlength(spec.TrainNormalPath) > 0 && ...
+                isfile(spec.TrainNormalPath)
+            train_normal = read_benchmark_csv(spec.TrainNormalPath);
+        end
+
+        if strlength(spec.TrainAnomalyPath) > 0 && ...
+                isfile(spec.TrainAnomalyPath)
+            train_labelled = read_benchmark_csv(spec.TrainAnomalyPath);
+        end
+
+        validate_channel_compatibility( ...
+            test_data, train_normal, train_labelled, spec.Name);
+
+        % -------------------------------------------------------------
+        % Select model structure WITHOUT looking at test labels.
+        % -------------------------------------------------------------
+        [structure_source, structure_mode] = ...
